@@ -1,0 +1,149 @@
+/* src/popup/style.css */
+
+/* 定义一些颜色变量，方便统一修改 */
+:root {
+    --primary-color: #4A90E2; /* 一种漂亮的蓝色 */
+    --primary-color-light: #7ab3f0;
+    --background-color: #f4f7f9;
+    --card-background: #ffffff;
+    --text-color: #333;
+    --text-color-light: #777;
+    --border-color: #e0e6ed;
+    --switch-bg-off: #ccc;
+    --switch-bg-on: var(--primary-color);
+}
+
+/* 全局样式和字体 */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background-color: var(--background-color);
+    width: 320px;
+    padding: 0;
+    margin: 0;
+    color: var(--text-color);
+}
+
+/* 主容器卡片样式 */
+.container {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px; /* 增加元素间距 */
+}
+
+/* 标题 */
+h1 {
+    margin: 0;
+    text-align: center;
+    font-size: 22px;
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+/* --- 滑动开关美化 --- */
+.toggle-switch {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-top: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* 隐藏原始的 checkbox */
+#toggle-switch-input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+/* 开关的轨道 (使用 label 伪装) */
+.toggle-switch .slider {
+    position: relative;
+    cursor: pointer;
+    width: 44px;
+    height: 24px;
+    background-color: var(--switch-bg-off);
+    border-radius: 24px;
+    transition: background-color 0.3s ease;
+}
+
+/* 开关的滑块 (使用 ::before 伪元素) */
+.toggle-switch .slider::before {
+    content: "";
+    position: absolute;
+    height: 20px;
+    width: 20px;
+    left: 2px;
+    top: 2px;
+    background-color: white;
+    border-radius: 50%;
+    transition: transform 0.3s ease;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+/* 当 checkbox 被选中时，改变轨道颜色和滑块位置 */
+#toggle-switch-input:checked + .slider {
+    background-color: var(--switch-bg-on);
+}
+
+#toggle-switch-input:checked + .slider::before {
+    transform: translateX(20px);
+}
+/* -------------------- */
+
+
+/* 状态文本 */
+#status-text {
+    font-size: 16px;
+    font-weight: 500;
+}
+
+/* 请求计数 */
+p {
+    margin: 0;
+    text-align: center;
+    font-size: 14px;
+    color: var(--text-color-light);
+}
+
+#request-count {
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--primary-color);
+}
+
+/* 按钮区域 */
+.actions {
+    display: flex;
+    gap: 15px;
+}
+
+/* 统一按钮样式 */
+.actions button {
+    flex: 1; /* 让按钮平分宽度 */
+    padding: 10px 15px;
+    border: none;
+    border-radius: 8px;
+    background-color: var(--primary-color);
+    color: white;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+.actions button:hover:not(:disabled) {
+    background-color: var(--primary-color-light);
+}
+
+.actions button:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.actions button:disabled {
+    background-color: #b0c4de; /* 禁用的蓝色 */
+    cursor: not-allowed;
+    opacity: 0.7;
+}

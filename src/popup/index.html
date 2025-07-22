@@ -1,0 +1,30 @@
+<!-- src/popup/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>HarCollector Control</title>
+    <link href="./style.css" rel="stylesheet">
+</head>
+<body>
+<div class="container">
+    <h1>HarCollector</h1>
+
+    <div class="toggle-switch">
+        <input id="toggle-switch-input" type="checkbox"/>
+        <label class="slider" for="toggle-switch-input"></label>
+        <span id="status-text">Sniffing Disabled</span>
+    </div>
+
+    <p>Captured Requests: <strong id="request-count">0</strong></p>
+
+    <div class="actions">
+        <button disabled id="save-har-button">Save as HAR</button>
+        <button disabled id="clear-data-button">Clear Data</button>
+    </div>
+</div>
+<!-- 引入我们的 TS 脚本 -->
+<script src="./main.ts" type="module"></script>
+</body>
+</html>

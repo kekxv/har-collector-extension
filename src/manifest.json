@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "HarCollector - Network Inspector",
+  "version": "1.0.0",
+  "description": "Captures and saves network requests as HAR files.",
+  "permissions": [
+    "storage",
+    "debugger",
+    "tabs",
+    "downloads",
+    "offscreen"
+  ],
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "src/popup/index.html",
+    "default_icon": {
+      "128": "src/assets/icon128.png"
+    }
+  },
+  "icons": {
+    "128": "src/assets/icon128.png"
+  }
+}
