@@ -38,18 +38,11 @@ jobs:
         run: |
           cd dist
           zip -r "../${{ steps.prep.outputs.zipname }}" .
-
-      - name: Read README.md for release notes
-        id: readme
-        run: |
-          echo 'RELEASE_BODY<<EOF' >> $GITHUB_ENV
-          cat README.md >> $GITHUB_ENV
-          echo 'EOF' >> $GITHUB_ENV
-
+          
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.prep.outputs.zipname }}
-          body: ${{ env.RELEASE_BODY }}
+          body_path: README.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
