@@ -1,0 +1,52 @@
+name: Release on Tag
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build project
+        run: pnpm run build
+
+      - name: Prepare release file name
+        id: prep
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          DATE=$(date +'%Y%m%d')
+          ZIPNAME="har-collector-extension-${VERSION}-${DATE}.zip"
+          echo "zipname=$ZIPNAME" >> $GITHUB_OUTPUT
+
+      - name: Archive dist folder
+        run: |
+          cd dist
+          zip -r "../${{ steps.prep.outputs.zipname }}" .
+
+      - name: Read README.md for release notes
+        id: readme
+        run: |
+          echo 'RELEASE_BODY<<EOF' >> $GITHUB_ENV
+          cat README.md >> $GITHUB_ENV
+          echo 'EOF' >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.prep.outputs.zipname }}
+          body: ${{ env.RELEASE_BODY }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
