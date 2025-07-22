@@ -21,10 +21,10 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: pnpm install
+        run: npx pnpm install
 
       - name: Build project
-        run: pnpm run build
+        run: npx pnpm run build
 
       - name: Prepare release file name
         id: prep
