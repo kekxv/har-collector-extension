@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HarCollector - Network Inspector",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Captures and saves network requests as HAR files.",
   "permissions": [
     "storage",
