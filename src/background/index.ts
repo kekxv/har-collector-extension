@@ -119,7 +119,7 @@ async function updateRequestCount() {
 }
 
 async function saveHar() {
-    // 1. 生成 HAR 字符串 (逻辑不变)
+    // 1. 生成 HAR 字符串 (通用逻辑)
     const harLog = {
       log: {
         version: "1.2", creator: { name: "HarCollector Extension", version: "1.0.0" },
@@ -154,37 +154,44 @@ async function saveHar() {
         }
       }
     const harString = JSON.stringify(harLog, null, 2);
+    const safeFilename = `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`;
 
-    // 2. 确保 Offscreen Document 存在
-    const offscreenUrl = chrome.runtime.getURL('src/offscreen/index.html');
-    const existingContexts = await chrome.runtime.getContexts({
-        contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [offscreenUrl]
-    });
-
-    if (existingContexts.length === 0) {
-        await chrome.offscreen.createDocument({
-            url: offscreenUrl, reasons: [chrome.offscreen.Reason.BLOBS],
-            justification: 'To create a blob URL for downloading the HAR file.',
+    // 2. 检查是否支持 Offscreen API (新旧 API 兼容性核心)
+    if (chrome.offscreen && chrome.offscreen.createDocument) {
+        // 新 API 路径: 使用 Offscreen Document
+        console.log("Using Offscreen API path.");
+        // 确保 Offscreen Document 存在
+        const offscreenUrl = chrome.runtime.getURL('src/offscreen/index.html');
+        const existingContexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [offscreenUrl]
         });
-    }
 
-    // 3. 向 Offscreen Document 请求 Blob URL
-    const { url: blobUrl } = await chrome.runtime.sendMessage({
-        type: 'create-blob-url',
-        target: 'offscreen',
-        data: harString,
-    });
-
-    // 4. Background Script 执行下载
-    if (blobUrl) {
-        const safeFilename = `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`;
-
-        chrome.downloads.download({
-            url: blobUrl,
-            filename: safeFilename, // 使用安全的文件名
-            saveAs: true,
+        if (existingContexts.length === 0) {
+            await chrome.offscreen.createDocument({
+                url: offscreenUrl, reasons: [chrome.offscreen.Reason.BLOBS],
+                justification: 'To download the HAR file.',
+            });
+        }
+        // 将保存任务发送到 offscreen
+        chrome.runtime.sendMessage({
+            type: 'download-har',
+            target: 'offscreen',
+            data: harString,
+            filename: safeFilename
         });
     } else {
-        console.error("Failed to get a blob URL from offscreen document.");
+        // 旧 API 路径: 直接在 Background Script 中下载
+        console.log("Using direct download path (fallback).");
+        const blob = new Blob([harString], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+
+        chrome.downloads.download({
+            url: url,
+            filename: safeFilename,
+            saveAs: true,
+        }, () => {
+            // 下载完成后，释放 Blob URL
+            URL.revokeObjectURL(url);
+        });
     }
 }

@@ -10,6 +10,11 @@
     "downloads",
     "offscreen"
   ],
+  "offscreen": {
+    "path": "src/offscreen/index.html",
+    "reasons": ["BLOBS"],
+    "justification": "For saving HAR files"
+  },
   "background": {
     "service_worker": "src/background/index.ts",
     "type": "module"
