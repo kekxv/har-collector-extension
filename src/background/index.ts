@@ -175,19 +175,30 @@ async function saveHar() {
     const safeFilename = `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`;
 
     if (!chrome.offscreen || !chrome.offscreen.createDocument) {
-        // 旧 API 路径: 直接在 Background Script 中下载
-        console.log("Using direct download path (fallback).");
-        const blob = new Blob([harString], {type: 'application/json'});
-        const url = URL.createObjectURL(blob);
-
-        chrome.downloads.download({
-            url: url,
-            filename: safeFilename,
-            saveAs: true,
-        }, () => {
-            // 下载完成后，释放 Blob URL
-            URL.revokeObjectURL(url);
+        // 旧 API 路径: 弹出一个网页进行下载
+        // 创建一个新窗口来处理下载，因为旧版本不支持 offscreen
+        const popupWindow = await chrome.windows.create({
+            url: chrome.runtime.getURL('src/offscreen/index.html'), // 使用 offscreen 的 HTML 作为弹出页
+            type: 'popup',
+            width: 600,
+            height: 400,
+            focused: true
         });
+
+        if (popupWindow && popupWindow.id) {
+            // 等待页面加载完成，然后发送消息
+            // 实际应用中可能需要更健壮的等待机制，例如监听 tab.onUpdated
+            setTimeout(() => {
+                chrome.runtime.sendMessage({
+                    type: 'DOWNLOAD_HAR',
+                    harString: harString,
+                    safeFilename: safeFilename,
+                    target: 'offscreen_popup' // 标记给 offscreen/main.ts 区分处理
+                }).catch(e => console.error("Failed to send message to popup:", e));
+            }, 500); // 延迟发送，确保页面有时间加载
+        } else {
+            console.error("Failed to create popup window for download.");
+        }
         return;
     }
     // 2. 确保 Offscreen Document 存在

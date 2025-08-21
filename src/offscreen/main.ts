@@ -12,5 +12,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         // 返回 true 表明我们将异步地发送响应
         return true;
+    } else if (message.target === 'offscreen_popup' && message.type === 'DOWNLOAD_HAR') {
+        const { harString, safeFilename } = message;
+
+        const blob = new Blob([harString], { type: 'application/octet-stream' });
+        const blobUrl = URL.createObjectURL(blob);
+
+        chrome.downloads.download({
+            url: blobUrl,
+            filename: safeFilename,
+            saveAs: true,
+        }, (downloadId) => {
+            if (chrome.runtime.lastError) {
+                console.error("Download failed in popup:", chrome.runtime.lastError.message);
+            } else {
+                console.log("Download initiated from popup with ID:", downloadId);
+            }
+            // Revoke the blob URL after download is initiated
+            URL.revokeObjectURL(blobUrl);
+
+            // Close the popup window after download is initiated
+            setTimeout(() => {
+                window.close();
+            }, 1000); // Close after 1 second
+        });
+        // No return true here, as no async response is expected back to the sender
     }
 });
