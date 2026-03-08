@@ -54,22 +54,6 @@ async function saveRequest(tabId: number, requestId: string, data: any) {
     db.close();
 }
 
-async function getRequestsForTab(tabId: number): Promise<any[]> {
-    const db = await openDB();
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const result = await new Promise<any[]>((resolve) => {
-        const req = store.getAll();
-        req.onsuccess = () => {
-            const all = req.result || [];
-            resolve(all.filter(r => r.tabId === tabId));
-        };
-        req.onerror = () => resolve([]);
-    });
-    db.close();
-    return result;
-}
-
 async function getAllRequests(): Promise<any[]> {
     const db = await openDB();
     const tx = db.transaction(STORE_NAME, 'readonly');
@@ -99,7 +83,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 // 监听消息
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
     if (message.type === 'START_SNIFFING') {
         startSniffing();
     } else if (message.type === 'STOP_SNIFFING') {
