@@ -10,6 +10,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const url = URL.createObjectURL(blob);
         sendResponse({url: url});
 
+        // 定时释放 URL 以防内存泄漏
+        setTimeout(() => {
+            URL.revokeObjectURL(url);
+        }, 60000); // 1分钟后释放，足够下载启动
+
         // 返回 true 表明我们将异步地发送响应
         return true;
     } else if (message.target === 'offscreen_popup' && message.type === 'DOWNLOAD_HAR') {
