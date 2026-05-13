@@ -196,3 +196,44 @@ describe('fallback error display', () => {
         expect(state.isSuccess).toBe(true);
     });
 });
+
+// --- Storage quota fallback ---
+describe('fallback storage quota exceeded', () => {
+    it('falls back to message passing when storage has no pending download', async () => {
+        // Strategy 1: no pending download in storage
+        const storageResult = await mockChrome.storage.local.get('_pendingHarDownload');
+        expect(storageResult._pendingHarDownload).toBeUndefined();
+
+        // Strategy 2: request via message passing
+        mockChrome.runtime.sendMessage.mockResolvedValueOnce({
+            harLog: { log: { entries: [] } }
+        });
+        const messageResponse = await mockChrome.runtime.sendMessage({ type: 'FALLBACK_REQUEST_DATA' });
+        expect(messageResponse.harLog).toBeDefined();
+    });
+
+    it('message passing also provides HAR data with correct structure', async () => {
+        mockChrome.runtime.sendMessage.mockResolvedValueOnce({
+            harLog: { log: { entries: [{ request: { method: 'GET', url: 'https://test.com' } }] } },
+            count: 1
+        });
+
+        const response = await mockChrome.runtime.sendMessage({ type: 'FALLBACK_REQUEST_DATA' });
+
+        expect(response.count).toBe(1);
+        expect(response.harLog.log.entries).toHaveLength(1);
+        expect(response.error).toBeUndefined();
+    });
+
+    it('reports error when both storage and message passing fail', async () => {
+        // No pending data
+        const storageResult = await mockChrome.storage.local.get('_pendingHarDownload');
+        expect(storageResult._pendingHarDownload).toBeUndefined();
+
+        // Message passing also fails
+        mockChrome.runtime.sendMessage.mockResolvedValueOnce({ error: 'No requests captured' });
+        const response = await mockChrome.runtime.sendMessage({ type: 'FALLBACK_REQUEST_DATA' });
+
+        expect(response.error).toBe('No requests captured');
+    });
+});

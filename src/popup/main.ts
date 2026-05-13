@@ -42,7 +42,7 @@ function updateUI(isEnabled: boolean, count: number) {
         ? (msg('sniffingEnabled') || 'Sniffing Enabled')
         : (msg('sniffingDisabled') || 'Sniffing Disabled');
     requestCountEl.textContent = count.toString();
-    const buttonsDisabled = !isEnabled || count === 0;
+    const buttonsDisabled = count === 0;
     saveHarButton.disabled = buttonsDisabled;
     clearDataButton.disabled = buttonsDisabled;
 }
@@ -62,9 +62,6 @@ toggleSwitch.addEventListener('change', () => {
     const newState = toggleSwitch.checked;
     chrome.storage.local.set({isEnabled: newState});
     chrome.runtime.sendMessage({type: newState ? 'START_SNIFFING' : 'STOP_SNIFFING'});
-    if (!newState) {
-        updateUI(false, 0);
-    }
 });
 
 saveHarButton.addEventListener('click', () => {

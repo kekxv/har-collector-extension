@@ -5,7 +5,7 @@
 class MockChromeStorage {
     private data: Record<string, any> = {};
 
-    async get(keys: string | string[] | Record<string, any> | null): Promise<Record<string, any>> {
+    get = vi.fn(async (keys: string | string[] | Record<string, any> | null): Promise<Record<string, any>> => {
         if (keys === null) return { ...this.data };
         if (Array.isArray(keys)) {
             const result: Record<string, any> = {};
@@ -18,39 +18,34 @@ class MockChromeStorage {
             return result;
         }
         return { [keys]: this.data[keys] };
-    }
+    });
 
-    async set(items: Record<string, any>): Promise<void> {
+    set = vi.fn(async (items: Record<string, any>): Promise<void> => {
         Object.assign(this.data, items);
-    }
+    });
 
-    async remove(keys: string | string[]): Promise<void> {
+    remove = vi.fn(async (keys: string | string[]): Promise<void> => {
         if (Array.isArray(keys)) {
             for (const key of keys) delete this.data[key];
         } else {
             delete this.data[keys];
         }
-    }
+    });
 
     clear() {
         this.data = {};
     }
 }
 
-class MockChromeStorageArea {
-    private parent: MockChromeStorage;
-    constructor(parent: MockChromeStorage) { this.parent = parent; }
-    get = (keys: any) => this.parent.get(keys);
-    set = (items: any) => this.parent.set(items);
-    remove = (keys: any) => this.parent.remove(keys);
-    clear = () => this.parent.clear();
-}
-
-const mockStorage = new MockChromeStorage();
+export const mockStorage = new MockChromeStorage();
 
 export const mockChrome = {
     storage: {
-        local: new MockChromeStorageArea(mockStorage),
+        local: {
+            get: mockStorage.get,
+            set: mockStorage.set,
+            remove: mockStorage.remove,
+        },
     },
     runtime: {
         lastError: null as chrome.runtime.LastError | null,
@@ -90,9 +85,26 @@ export const mockChrome = {
 // Replace global chrome with mock
 (globalThis as any).chrome = mockChrome;
 
-// Reset mocks between tests
+// Reset mock data and call history between tests (preserves mock implementations)
 beforeEach(() => {
-    mockStorage.clear();
-    vi.clearAllMocks();
+    (mockStorage as any).data = {};
     (mockChrome.runtime as any).lastError = null;
+    // Clear call history on all spies
+    mockStorage.get.mockClear();
+    mockStorage.set.mockClear();
+    mockStorage.remove.mockClear();
+    mockChrome.runtime.sendMessage.mockClear();
+    mockChrome.runtime.getContexts.mockClear();
+    mockChrome.runtime.onMessage.addListener.mockClear();
+    mockChrome.runtime.onInstalled.addListener.mockClear();
+    mockChrome.debugger.attach.mockClear();
+    mockChrome.debugger.detach.mockClear();
+    mockChrome.debugger.sendCommand.mockClear();
+    mockChrome.debugger.getTargets.mockClear();
+    mockChrome.debugger.onEvent.addListener.mockClear();
+    mockChrome.debugger.onDetach.addListener.mockClear();
+    mockChrome.tabs.query.mockClear();
+    mockChrome.tabs.create.mockClear();
+    mockChrome.downloads.download.mockClear();
+    mockChrome.offscreen.createDocument.mockClear();
 });

@@ -350,8 +350,18 @@ async function tryOffscreenDownload(harString: string, safeFilename: string): Pr
 
 async function tryFallbackPageDownload(harString: string, safeFilename: string): Promise<void> {
     console.log("Opening fallback download page...");
-    // Store HAR data temporarily for fallback page to retrieve
-    await chrome.storage.local.set({ _pendingHarDownload: { harString, safeFilename } });
+    // Try to pre-store HAR data for faster retrieval.
+    // For large HAR files, storage.local quota may be exceeded —
+    // the fallback page will request data via message passing instead.
+    try {
+        await chrome.storage.local.set({ _pendingHarDownload: { harString, safeFilename } });
+    } catch (e) {
+        const quotaError = e instanceof Error && e.message.includes('quota');
+        console.warn(
+            `Could not pre-store HAR data in storage${quotaError ? ' (quota exceeded)' : ''}. ` +
+            'Fallback page will request via message passing.'
+        );
+    }
 
     const fallbackUrl = chrome.runtime.getURL('src/fallback/index.html');
     await chrome.tabs.create({ url: fallbackUrl, active: true });

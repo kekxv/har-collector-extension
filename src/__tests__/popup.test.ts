@@ -129,25 +129,26 @@ describe('popup UI update', () => {
             toggleChecked: isEnabled,
             statusText: isEnabled ? 'Sniffing Enabled' : 'Sniffing Disabled',
             requestCount: count,
-            saveDisabled: !isEnabled || count === 0,
-            clearDisabled: !isEnabled || count === 0,
+            saveDisabled: count === 0,
+            clearDisabled: count === 0,
         };
     };
 
-    it('shows disabled state when sniffing is off', () => {
-        updateUI(false, 5);
-        expect(ui.saveDisabled).toBe(true);
-        expect(ui.clearDisabled).toBe(true);
-        expect(ui.statusText).toBe('Sniffing Disabled');
-    });
-
-    it('shows disabled state when no requests captured', () => {
+    it('shows disabled buttons when no requests captured', () => {
         updateUI(true, 0);
         expect(ui.saveDisabled).toBe(true);
         expect(ui.clearDisabled).toBe(true);
     });
 
-    it('enables buttons when sniffing on and requests exist', () => {
+    it('enables buttons when requests exist regardless of sniffing state', () => {
+        updateUI(false, 5);
+        expect(ui.saveDisabled).toBe(false);
+        expect(ui.clearDisabled).toBe(false);
+        expect(ui.statusText).toBe('Sniffing Disabled');
+        expect(ui.requestCount).toBe(5);
+    });
+
+    it('enables buttons when both sniffing on and requests exist', () => {
         updateUI(true, 5);
         expect(ui.saveDisabled).toBe(false);
         expect(ui.clearDisabled).toBe(false);
@@ -227,8 +228,9 @@ describe('toggle switch behavior', () => {
         expect(sentMessages[0].type).toBe('START_SNIFFING');
     });
 
-    it('disables sniffing and resets UI when toggled off', async () => {
+    it('disables sniffing when toggled off without clearing count', async () => {
         const sentMessages: any[] = [];
+        mockChrome.storage.local.set.mockImplementation(async () => {});
         mockChrome.runtime.sendMessage.mockImplementation((msg: any) => {
             sentMessages.push(msg);
             return Promise.resolve();
@@ -238,5 +240,6 @@ describe('toggle switch behavior', () => {
         mockChrome.runtime.sendMessage({ type: 'STOP_SNIFFING' });
 
         expect(sentMessages[0].type).toBe('STOP_SNIFFING');
+        // Should NOT clear the request count — user can still save/clear data
     });
 });
