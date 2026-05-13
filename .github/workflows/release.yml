@@ -71,6 +71,9 @@ jobs:
       - name: Build project
         run: npx pnpm run build
 
+      - name: Run tests
+        run: npx pnpm run test:run
+
       - name: Prepare release file name
         id: prep
         run: |
