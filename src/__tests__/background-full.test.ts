@@ -32,8 +32,6 @@ function resetMocks() {
     mockChrome.tabs.create.mockResolvedValue({ id: 1 });
     mockChrome.downloads.download.mockReset();
     mockChrome.downloads.download.mockImplementation((_o: any, cb: (id: number) => void) => { if (cb) cb(1); });
-    mockChrome.offscreen.createDocument.mockReset();
-    mockChrome.offscreen.createDocument.mockResolvedValue(undefined);
 }
 
 // --- Tab lifecycle ---
@@ -173,88 +171,85 @@ describe('stopSniffing', () => {
     });
 });
 
-// --- tryOffscreenDownload ---
-describe('tryOffscreenDownload', () => {
-    it('creates offscreen document when no existing context', async () => {
+// --- saveHar opens fallback page ---
+describe('saveHar opens fallback page', () => {
+    it('opens fallback tab with correct URL', async () => {
         resetMocks();
-        mockChrome.runtime.getContexts.mockResolvedValue([]);
 
-        const existingContexts = await mockChrome.runtime.getContexts({
-            contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: ['chrome-extension://mock-id/src/offscreen/index.html']
+        await mockChrome.tabs.create({ url: 'chrome-extension://mock-id/src/fallback/index.html', active: true });
+
+        expect(mockChrome.tabs.create).toHaveBeenCalledWith({
+            url: 'chrome-extension://mock-id/src/fallback/index.html',
+            active: true,
         });
-        expect(existingContexts).toHaveLength(0);
-
-        if (existingContexts.length === 0) {
-            await mockChrome.offscreen.createDocument({} as any);
-        }
-
-        expect(mockChrome.offscreen.createDocument).toHaveBeenCalled();
     });
 
-    it('skips creation when offscreen context already exists', async () => {
+    it('sends info notification when opening download page', async () => {
         resetMocks();
-        mockChrome.runtime.getContexts.mockResolvedValue([{ type: 'OFFSCREEN_DOCUMENT' }]);
 
-        const existingContexts = await mockChrome.runtime.getContexts({
-            contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: ['chrome-extension://mock-id/src/offscreen/index.html']
+        mockChrome.runtime.sendMessage({ type: 'NOTIFICATION', level: 'info', message: 'Opening download page...' });
+
+        expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith({
+            type: 'NOTIFICATION', level: 'info', message: 'Opening download page...',
         });
-
-        if (existingContexts.length === 0) {
-            await mockChrome.offscreen.createDocument({} as any);
-        }
-
-        expect(mockChrome.offscreen.createDocument).not.toHaveBeenCalled();
     });
 });
 
-// --- tryFallbackPageDownload ---
-describe('tryFallbackPageDownload', () => {
-    it('stores HAR data in storage before opening tab', async () => {
+// --- Chunk protocol: FALLBACK_INIT_DOWNLOAD ---
+describe('FALLBACK_INIT_DOWNLOAD', () => {
+    it('returns chunk metadata for non-zero count', async () => {
         resetMocks();
-        const harString = '{"log":{}}';
-        const safeFilename = 'test.har';
 
-        await mockChrome.storage.local.set({ _pendingHarDownload: { harString, safeFilename } });
-        await mockChrome.tabs.create({ url: 'chrome-extension://mock-id/src/fallback/index.html', active: true });
+        const totalCount = 1200;
+        const CHUNK_SIZE_ENTRIES = 500;
+        const totalChunks = Math.max(1, Math.ceil(totalCount / CHUNK_SIZE_ENTRIES));
+        const baseFilename = 'har-capture-test.har';
 
-        expect(mockChrome.storage.local.set).toHaveBeenCalledWith({
-            _pendingHarDownload: { harString, safeFilename }
-        });
-        expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-            url: 'chrome-extension://mock-id/src/fallback/index.html',
-            active: true,
-        });
+        const result = { totalCount, totalChunks, baseFilename };
+
+        expect(result.totalCount).toBe(1200);
+        expect(result.totalChunks).toBe(3);
     });
 
-    it('still opens fallback page when storage quota is exceeded', async () => {
+    it('returns error when no requests captured', () => {
+        const totalCount = 0;
+        const result = totalCount === 0
+            ? { error: "No requests captured" }
+            : { totalCount, totalChunks: 1, baseFilename: 'test.har' };
+
+        expect(result).toEqual({ error: "No requests captured" });
+    });
+});
+
+// --- Chunk protocol: FALLBACK_REQUEST_CHUNK ---
+describe('FALLBACK_REQUEST_CHUNK', () => {
+    it('builds valid HAR JSON chunk', async () => {
         resetMocks();
-        // Simulate storage quota error
-        mockChrome.storage.local.set.mockRejectedValueOnce(
-            new Error('Resource::kQuotaBytes quota exceeded')
-        );
 
-        // The actual code catches the error and still opens the fallback page
-        try {
-            await mockChrome.storage.local.set({ _pendingHarDownload: { harString: '{}', safeFilename: 'test.har' } });
-        } catch (e) {
-            // In the real code this is caught, logged, and fallback still opens
-        }
-        await mockChrome.tabs.create({ url: 'chrome-extension://mock-id/src/fallback/index.html', active: true });
+        const json = JSON.stringify({
+            log: {
+                version: "1.2",
+                creator: { name: "HarCollector Extension", version: "1.0.5" },
+                pages: [],
+                entries: [{ startedDateTime: "2024-01-01T00:00:00.000Z", time: 1000, request: {}, response: {}, cache: {}, timings: {} }],
+            },
+        }, null, 2);
 
-        expect(mockChrome.tabs.create).toHaveBeenCalledWith({
-            url: 'chrome-extension://mock-id/src/fallback/index.html',
-            active: true,
-        });
+        const parsed = JSON.parse(json);
+        expect(parsed.log.entries).toHaveLength(1);
+        expect(parsed.log.version).toBe('1.2');
     });
 
-    it('logs a warning when storage fails but continues', async () => {
-        const quotaError = new Error('Resource::kQuotaBytes quota exceeded');
-        const isQuotaError = quotaError.message.includes('quota');
-        expect(isQuotaError).toBe(true);
+    it('generates correct chunk filenames', () => {
+        const baseFilename = 'har-capture-2024-06-15T10-30-45_123Z.har';
 
-        const nonQuotaError = new Error('Some other error');
-        const isNonQuotaError = nonQuotaError.message.includes('quota');
-        expect(isNonQuotaError).toBe(false);
+        // Single chunk: no suffix
+        const singleFilename = baseFilename;
+        expect(singleFilename).toBe('har-capture-2024-06-15T10-30-45_123Z.har');
+
+        // Multi-chunk: with suffix
+        const multiFilename = baseFilename.replace('.har', '-001.har');
+        expect(multiFilename).toBe('har-capture-2024-06-15T10-30-45_123Z-001.har');
     });
 });
 

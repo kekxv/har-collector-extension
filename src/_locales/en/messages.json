@@ -27,9 +27,13 @@
     "message": "Captured Requests",
     "description": "Label for request counter"
   },
+  "openManagement": {
+    "message": "Open Manager",
+    "description": "Open management/download page button"
+  },
   "saveHarButton": {
     "message": "Save as HAR",
-    "description": "Save button text"
+    "description": "Save button text on management page"
   },
   "clearDataButton": {
     "message": "Clear Data",
@@ -43,25 +47,93 @@
     "message": "HarCollector - Downloading...",
     "description": "Fallback page title"
   },
+  "fallbackInitTitle": {
+    "message": "Preparing download...",
+    "description": "Fallback init heading"
+  },
+  "fallbackInitMsg": {
+    "message": "Analyzing captured data...",
+    "description": "Fallback init status"
+  },
+  "fallbackDownloadTitle": {
+    "message": "Downloading HAR files",
+    "description": "Fallback download heading"
+  },
+  "fallbackTotalInfo": {
+    "message": "{count} entries · {files} file{plural}",
+    "description": "Total entries and files info"
+  },
+  "fallbackChunkProgress": {
+    "message": "File {current} of {total}",
+    "description": "Chunk progress text"
+  },
+  "fallbackRequestingChunk": {
+    "message": "Requesting file {current} of {total}...",
+    "description": "Requesting chunk message"
+  },
+  "fallbackFileStatusPending": {
+    "message": "Pending",
+    "description": "File pending status"
+  },
+  "fallbackFileStatusPreparing": {
+    "message": "Preparing",
+    "description": "File preparing status"
+  },
+  "fallbackFileStatusDownloading": {
+    "message": "Downloading",
+    "description": "File downloading status"
+  },
+  "fallbackFileStatusDone": {
+    "message": "Done",
+    "description": "File done status"
+  },
+  "fallbackFileStatusError": {
+    "message": "Error",
+    "description": "File error status"
+  },
+  "fallbackAllDone": {
+    "message": "All files downloaded!",
+    "description": "Fallback success heading"
+  },
+  "fallbackTotalEntries": {
+    "message": "{count} entries saved",
+    "description": "Total entries saved subtitle"
+  },
+  "fallbackAutoClose": {
+    "message": "Closing in 3 seconds...",
+    "description": "Auto-close countdown message"
+  },
+  "fallbackStats": {
+    "message": "{files} files · {size} total",
+    "description": "Download statistics"
+  },
+  "fallbackChunkError": {
+    "message": "Chunk {index} failed: {error}",
+    "description": "Chunk error message"
+  },
+  "fallbackDownloadError": {
+    "message": "Download failed for file {index}: {error}",
+    "description": "Download error message"
+  },
   "fallbackPreparing": {
     "message": "Preparing download...",
-    "description": "Fallback page heading"
+    "description": "Fallback page heading (legacy)"
   },
   "fallbackRetrieving": {
     "message": "Retrieving HAR data...",
-    "description": "Fallback status message"
+    "description": "Fallback status message (legacy)"
   },
   "fallbackRetryMsg": {
     "message": "Retrieving HAR data (attempt {attempt}/{total})...",
-    "description": "Fallback retry message. {attempt} and {total} are placeholders."
+    "description": "Fallback retry message"
   },
   "fallbackDownloadStarted": {
     "message": "Download started",
-    "description": "Fallback success heading"
+    "description": "Fallback success heading (legacy)"
   },
   "fallbackDownloading": {
     "message": "Your HAR file is downloading...",
-    "description": "Fallback success message"
+    "description": "Fallback success message (legacy)"
   },
   "fallbackDownloadFailed": {
     "message": "Download failed",
@@ -73,14 +145,14 @@
   },
   "fallbackUnexpectedError": {
     "message": "Unexpected error: {error}",
-    "description": "Fallback unexpected error message. {error} is the error text."
+    "description": "Fallback unexpected error message"
   },
-  "offscreenReason": {
-    "message": "For saving HAR files",
-    "description": "Offscreen document justification"
+  "splitFiles": {
+    "message": "Split into files for large data",
+    "description": "Checkbox label for splitting HAR files"
   },
-  "offscreenJustification": {
-    "message": "To create a blob URL for downloading the HAR file.",
-    "description": "Offscreen document justification detail"
+  "loadMore": {
+    "message": "Load more",
+    "description": "Load more requests button text"
   }
 }

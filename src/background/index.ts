@@ -1,5 +1,7 @@
 /* src/background/index.ts */
-import { buildHarLog } from '../lib/har-builder.js';
+import { countRequests, iterateRequestsBatched } from '../lib/idb-cursor.js';
+import { CHUNK_SIZE_ENTRIES, generateChunkFilename } from '../lib/streaming-har.js';
+import { buildHarEntry, buildHarLog } from '../lib/har-builder.js';
 
 console.log("Background service worker started.");
 
@@ -89,19 +91,11 @@ async function clearAllData() {
     }
 }
 
-// --- Chrome compatibility check ---
-function checkChromeCompatibility(): { offscreen: boolean; getContexts: boolean } {
-    const hasOffscreen = typeof chrome.offscreen?.createDocument === 'function';
-    const hasGetContexts = typeof (chrome.runtime as any).getContexts === 'function';
-    return { offscreen: hasOffscreen, getContexts: hasGetContexts };
-}
-
-// --- Init ---
+// --- Message listener ---
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.local.set({ isEnabled: false, requestCount: 0 });
 });
 
-// --- Message listener ---
 chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
     if (message.type === 'START_SNIFFING') {
         startSniffing().catch(e => console.error("startSniffing failed:", e));
@@ -114,8 +108,24 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
             console.error("saveHar failed:", e);
             notifyPopup('error', `Failed to save HAR: ${e instanceof Error ? e.message : String(e)}`);
         });
+    } else if (message.type === 'FALLBACK_INIT_DOWNLOAD') {
+        handleFallbackInitDownload().then(data => {
+            _sendResponse(data);
+        }).catch(e => {
+            console.error("FALLBACK_INIT_DOWNLOAD failed:", e);
+            _sendResponse({ error: e instanceof Error ? e.message : String(e) });
+        });
+        return true;
+    } else if (message.type === 'FALLBACK_REQUEST_CHUNK') {
+        handleFallbackRequestChunk(message.chunkIndex).then(data => {
+            _sendResponse(data);
+        }).catch(e => {
+            console.error("FALLBACK_REQUEST_CHUNK failed:", e);
+            _sendResponse({ error: e instanceof Error ? e.message : String(e) });
+        });
+        return true;
     } else if (message.type === 'FALLBACK_REQUEST_DATA') {
-        // Fallback page requests HAR data
+        // Legacy path: build full HAR from all data (kept for backward compat with small datasets)
         handleFallbackRequestData().then(data => {
             _sendResponse(data);
         }).catch(e => {
@@ -126,6 +136,14 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
     } else if (message.type === 'GET_DEBUGGER_CONFLICTS') {
         _sendResponse({ conflicts: debuggerConflicts });
         debuggerConflicts = [];
+        return true;
+    } else if (message.type === 'GET_REQUEST_LIST') {
+        handleGetRequestList(message.offset ?? 0, message.limit ?? 50).then(data => {
+            _sendResponse(data);
+        }).catch(e => {
+            console.error("GET_REQUEST_LIST failed:", e);
+            _sendResponse({ error: e instanceof Error ? e.message : String(e) });
+        });
         return true;
     }
     return true;
@@ -245,9 +263,9 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
 
 async function updateRequestCount() {
     try {
-        const all = await getAllRequests();
-        await chrome.storage.local.set({ requestCount: all.length });
-        chrome.runtime.sendMessage({ type: 'UPDATE_COUNT', count: all.length }).catch(() => {});
+        const count = await countRequests();
+        await chrome.storage.local.set({ requestCount: count });
+        chrome.runtime.sendMessage({ type: 'UPDATE_COUNT', count }).catch(() => {});
     } catch (e) {
         console.error("updateRequestCount failed:", e);
     }
@@ -258,7 +276,7 @@ function notifyPopup(level: 'error' | 'success' | 'info', message: string) {
     chrome.runtime.sendMessage({ type: 'NOTIFICATION', level, message }).catch(() => {});
 }
 
-// --- Fallback data handler ---
+// --- Legacy fallback data handler (small datasets) ---
 async function handleFallbackRequestData(): Promise<{ entries: any[]; harLog: any; count: number } | { error: string }> {
     try {
         const allRequests = await getAllRequests();
@@ -274,99 +292,119 @@ async function handleFallbackRequestData(): Promise<{ entries: any[]; harLog: an
     }
 }
 
-// --- saveHar: 3-layer approach ---
+// --- saveHar: opens fallback page for chunked download ---
 async function saveHar() {
-    // Layer 1: Data validation
-    const allRequests = await getAllRequests();
-    if (allRequests.length === 0) {
+    const count = await countRequests();
+    if (count === 0) {
         notifyPopup('info', 'No requests captured to save.');
         console.log("No requests captured to save.");
         return;
     }
 
-    const harLog = buildHarLog(allRequests);
-
-    const harString = JSON.stringify(harLog, null, 2);
-    const safeFilename = `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`;
-
-    // Layer 2: Offscreen download (with compatibility check)
-    const compat = checkChromeCompatibility();
-    if (compat.offscreen && compat.getContexts) {
-        try {
-            const success = await tryOffscreenDownload(harString, safeFilename);
-            if (success) {
-                notifyPopup('success', `HAR file saved (${allRequests.length} entries).`);
-                return;
-            }
-        } catch (e) {
-            console.warn("Offscreen download failed, falling back:", e);
-        }
-    }
-
-    // Layer 3: Fallback page download
-    await tryFallbackPageDownload(harString, safeFilename);
-}
-
-async function tryOffscreenDownload(harString: string, safeFilename: string): Promise<boolean> {
-    const offscreenUrl = chrome.runtime.getURL('src/offscreen/index.html');
-    const existingContexts = await (chrome.runtime as any).getContexts({
-        contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [offscreenUrl]
-    });
-
-    if (existingContexts.length === 0) {
-        await chrome.offscreen.createDocument({
-            url: offscreenUrl,
-            reasons: [chrome.offscreen.Reason.BLOBS],
-            justification: 'To create a blob URL for downloading the HAR file.',
-        });
-    }
-
-    const response = await chrome.runtime.sendMessage({
-        type: 'create-blob-url',
-        target: 'offscreen',
-        data: harString,
-    });
-
-    if (!response || !response.url) {
-        throw new Error("Offscreen document did not return a blob URL");
-    }
-
-    return new Promise((resolve) => {
-        chrome.downloads.download({
-            url: response.url,
-            filename: safeFilename,
-            saveAs: true,
-        }, (downloadId) => {
-            if (chrome.runtime.lastError) {
-                console.error("Offscreen download failed:", chrome.runtime.lastError.message);
-                resolve(false);
-            } else {
-                console.log("Offscreen download started, ID:", downloadId);
-                resolve(true);
-            }
-        });
-    });
-}
-
-async function tryFallbackPageDownload(harString: string, safeFilename: string): Promise<void> {
-    console.log("Opening fallback download page...");
-    // Try to pre-store HAR data for faster retrieval.
-    // For large HAR files, storage.local quota may be exceeded —
-    // the fallback page will request data via message passing instead.
-    try {
-        await chrome.storage.local.set({ _pendingHarDownload: { harString, safeFilename } });
-    } catch (e) {
-        const quotaError = e instanceof Error && e.message.includes('quota');
-        console.warn(
-            `Could not pre-store HAR data in storage${quotaError ? ' (quota exceeded)' : ''}. ` +
-            'Fallback page will request via message passing.'
-        );
-    }
-
     const fallbackUrl = chrome.runtime.getURL('src/fallback/index.html');
     await chrome.tabs.create({ url: fallbackUrl, active: true });
+    notifyPopup('info', 'Opening download page...');
+}
 
-    notifyPopup('info', 'Opening fallback page to download HAR...');
+// --- Chunk protocol: init download ---
+async function handleFallbackInitDownload(): Promise<{ totalCount: number; totalChunks: number; baseFilename: string } | { error: string }> {
+    try {
+        const totalCount = await countRequests();
+        if (totalCount === 0) {
+            return { error: "No requests captured" };
+        }
+
+        const totalChunks = Math.max(1, Math.ceil(totalCount / CHUNK_SIZE_ENTRIES));
+        const baseFilename = `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`;
+
+        return { totalCount, totalChunks, baseFilename };
+    } catch (e) {
+        return { error: e instanceof Error ? e.message : String(e) };
+    }
+}
+
+// --- Chunk protocol: request a specific chunk ---
+async function handleFallbackRequestChunk(chunkIndex: number): Promise<{ chunkIndex: number; total: number; json: string; filename: string; entryCount: number } | { error: string }> {
+    try {
+        const batchIterator = iterateRequestsBatched({ batchSize: 100 });
+        let targetEntries: any[] = [];
+        let collected = 0;
+        const targetCount = CHUNK_SIZE_ENTRIES;
+
+        for await (const batch of batchIterator) {
+            for (const req of batch) {
+                if (!req.response || !req.request || !req.request.method) continue;
+                targetEntries.push(req);
+                collected++;
+                if (collected >= targetCount) break;
+            }
+            if (collected >= targetCount) break;
+        }
+
+        if (targetEntries.length === 0) {
+            return { error: `No entries for chunk ${chunkIndex}` };
+        }
+
+        // Build HAR JSON for this chunk
+        const entries = targetEntries.map(buildHarEntry);
+        const json = JSON.stringify({
+            log: {
+                version: "1.2",
+                creator: { name: "HarCollector Extension", version: "1.0.5" },
+                pages: [],
+                entries,
+            },
+        }, null, 2);
+
+        // Calculate total chunks for filename
+        const totalCount = await countRequests();
+        const totalChunks = Math.max(1, Math.ceil(totalCount / CHUNK_SIZE_ENTRIES));
+        const baseFilename = `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`;
+        const filename = generateChunkFilename(baseFilename, chunkIndex, totalChunks);
+
+        return { chunkIndex, total: totalChunks, json, filename, entryCount: entries.length };
+    } catch (e) {
+        return { error: e instanceof Error ? e.message : String(e) };
+    }
+}
+
+// --- Popup request list ---
+interface RequestListItem {
+    method: string;
+    url: string;
+    status: number | undefined;
+    tabId: number;
+}
+
+async function handleGetRequestList(offset: number, limit: number): Promise<{ items: RequestListItem[]; total: number } | { error: string }> {
+    try {
+        const total = await countRequests();
+        const items: RequestListItem[] = [];
+        let skipped = 0;
+        const batchIterator = iterateRequestsBatched({ batchSize: 100 });
+
+        for await (const batch of batchIterator) {
+            for (const req of batch) {
+                if (!req.request || !req.request.method) continue;
+                if (skipped < offset) {
+                    skipped++;
+                    continue;
+                }
+                items.push({
+                    method: req.request.method,
+                    url: req.request.url,
+                    status: req.response?.status,
+                    tabId: req.tabId,
+                });
+                if (items.length >= limit) break;
+            }
+            if (items.length >= limit) break;
+        }
+
+        return { items, total };
+    } catch (e) {
+        return { error: e instanceof Error ? e.message : String(e) };
+    }
 }
 
 // --- Service Worker keepalive ---

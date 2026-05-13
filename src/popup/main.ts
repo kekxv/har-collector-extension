@@ -4,7 +4,7 @@ import './style.css';
 const toggleSwitch = document.getElementById('toggle-switch-input') as HTMLInputElement;
 const statusText = document.getElementById('status-text') as HTMLSpanElement;
 const requestCountEl = document.getElementById('request-count') as HTMLElement;
-const saveHarButton = document.getElementById('save-har-button') as HTMLButtonElement;
+const openManagementButton = document.getElementById('open-management-button') as HTMLButtonElement;
 const clearDataButton = document.getElementById('clear-data-button') as HTMLButtonElement;
 const appTitle = document.getElementById('app-title') as HTMLHeadingElement;
 const capturedLabel = document.getElementById('captured-label') as HTMLSpanElement;
@@ -19,7 +19,7 @@ function msg(key: string, substitutions?: string | string[]): string {
 // Initialize static i18n strings
 appTitle.textContent = msg('popupTitle') || 'HarCollector';
 capturedLabel.textContent = msg('capturedRequests') || 'Captured Requests';
-saveHarButton.textContent = msg('saveHarButton') || 'Save as HAR';
+openManagementButton.textContent = msg('openManagement') || 'Open Manager';
 clearDataButton.textContent = msg('clearDataButton') || 'Clear Data';
 
 let notificationTimeout: number | null = null;
@@ -43,19 +43,8 @@ function updateUI(isEnabled: boolean, count: number) {
         : (msg('sniffingDisabled') || 'Sniffing Disabled');
     requestCountEl.textContent = count.toString();
     const buttonsDisabled = count === 0;
-    saveHarButton.disabled = buttonsDisabled;
+    openManagementButton.disabled = buttonsDisabled;
     clearDataButton.disabled = buttonsDisabled;
-}
-
-function setSaveButtonLoading(isLoading: boolean) {
-    if (isLoading) {
-        saveHarButton.disabled = true;
-        saveHarButton.dataset.loading = 'true';
-        saveHarButton.textContent = msg('savingButton') || 'Saving...';
-    } else {
-        saveHarButton.dataset.loading = '';
-        saveHarButton.textContent = msg('saveHarButton') || 'Save as HAR';
-    }
 }
 
 toggleSwitch.addEventListener('change', () => {
@@ -64,12 +53,8 @@ toggleSwitch.addEventListener('change', () => {
     chrome.runtime.sendMessage({type: newState ? 'START_SNIFFING' : 'STOP_SNIFFING'});
 });
 
-saveHarButton.addEventListener('click', () => {
-    setSaveButtonLoading(true);
+openManagementButton.addEventListener('click', () => {
     chrome.runtime.sendMessage({type: 'SAVE_HAR'});
-    setTimeout(() => {
-        setSaveButtonLoading(false);
-    }, 8000);
 });
 
 clearDataButton.addEventListener('click', () => {
@@ -85,11 +70,8 @@ chrome.storage.local.get(['isEnabled', 'requestCount'], (result) => {
 
 chrome.runtime.onMessage.addListener((message: any) => {
     if (message.type === 'UPDATE_COUNT') {
-        if (toggleSwitch.checked) {
-            updateUI(true, message.count);
-        }
+        updateUI(toggleSwitch.checked, message.count);
     } else if (message.type === 'NOTIFICATION') {
-        setSaveButtonLoading(false);
         showNotification(message.level, message.message);
     }
 });

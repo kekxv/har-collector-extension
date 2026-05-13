@@ -46,69 +46,11 @@ describe('popup notification logic', () => {
         };
 
         showNotifWithClear('info', 'first');
-        // At this point, clearedTimeout captured the initial 1, currentTimeout became 2
         expect(clearedTimeout).toBe(1);
 
         showNotifWithClear('error', 'second');
-        // Now clearedTimeout captured the previous 2
         expect(clearedTimeout).toBe(2);
         expect(notifications).toHaveLength(2);
-    });
-});
-
-// --- Button loading state ---
-describe('save button loading state', () => {
-    interface ButtonState {
-        disabled: boolean;
-        textContent: string;
-        datasetLoading: string;
-    }
-
-    let button: ButtonState;
-
-    beforeEach(() => {
-        button = { disabled: false, textContent: 'Save as HAR', datasetLoading: '' };
-    });
-
-    const setSaveButtonLoading = (isLoading: boolean) => {
-        if (isLoading) {
-            button.disabled = true;
-            button.datasetLoading = 'true';
-            button.textContent = 'Saving...';
-        } else {
-            button.datasetLoading = '';
-            button.textContent = 'Save as HAR';
-            // Note: disabled is restored by updateUI, not here
-        }
-    };
-
-    it('shows loading state', () => {
-        setSaveButtonLoading(true);
-        expect(button.disabled).toBe(true);
-        expect(button.textContent).toBe('Saving...');
-        expect(button.datasetLoading).toBe('true');
-    });
-
-    it('resets loading text but button disabled controlled by updateUI', () => {
-        setSaveButtonLoading(true);
-        setSaveButtonLoading(false);
-        expect(button.textContent).toBe('Save as HAR');
-        expect(button.datasetLoading).toBe('');
-        // disabled stays true - updateUI restores it
-        expect(button.disabled).toBe(true);
-    });
-
-    it('resets loading on notification received', () => {
-        setSaveButtonLoading(true);
-
-        // Simulate NOTIFICATION message
-        const message = { type: 'NOTIFICATION', level: 'success', message: 'Done' };
-        if (message.type === 'NOTIFICATION') {
-            setSaveButtonLoading(false);
-        }
-
-        expect(button.textContent).toBe('Save as HAR');
-        expect(button.datasetLoading).toBe('');
     });
 });
 
@@ -118,7 +60,7 @@ describe('popup UI update', () => {
         toggleChecked: boolean;
         statusText: string;
         requestCount: number;
-        saveDisabled: boolean;
+        openManagementDisabled: boolean;
         clearDisabled: boolean;
     }
 
@@ -129,20 +71,20 @@ describe('popup UI update', () => {
             toggleChecked: isEnabled,
             statusText: isEnabled ? 'Sniffing Enabled' : 'Sniffing Disabled',
             requestCount: count,
-            saveDisabled: count === 0,
+            openManagementDisabled: count === 0,
             clearDisabled: count === 0,
         };
     };
 
     it('shows disabled buttons when no requests captured', () => {
         updateUI(true, 0);
-        expect(ui.saveDisabled).toBe(true);
+        expect(ui.openManagementDisabled).toBe(true);
         expect(ui.clearDisabled).toBe(true);
     });
 
     it('enables buttons when requests exist regardless of sniffing state', () => {
         updateUI(false, 5);
-        expect(ui.saveDisabled).toBe(false);
+        expect(ui.openManagementDisabled).toBe(false);
         expect(ui.clearDisabled).toBe(false);
         expect(ui.statusText).toBe('Sniffing Disabled');
         expect(ui.requestCount).toBe(5);
@@ -150,7 +92,7 @@ describe('popup UI update', () => {
 
     it('enables buttons when both sniffing on and requests exist', () => {
         updateUI(true, 5);
-        expect(ui.saveDisabled).toBe(false);
+        expect(ui.openManagementDisabled).toBe(false);
         expect(ui.clearDisabled).toBe(false);
         expect(ui.statusText).toBe('Sniffing Enabled');
         expect(ui.requestCount).toBe(5);
@@ -186,21 +128,21 @@ describe('popup message handling', () => {
         expect(notification).toEqual({ level: 'error', message: 'Save failed' });
     });
 
-    it('SAVE_HAR sends message to background', () => {
+    it('SAVE_HAR (open management) sends message to background', () => {
         const sentMessages: any[] = [];
         mockChrome.runtime.sendMessage.mockImplementation((msg: any) => {
             sentMessages.push(msg);
             return Promise.resolve();
         });
 
-        // Simulate save button click
+        // Simulate "Open Manager" button click
         mockChrome.runtime.sendMessage({ type: 'SAVE_HAR' });
 
         expect(sentMessages).toHaveLength(1);
         expect(sentMessages[0].type).toBe('SAVE_HAR');
     });
 
-    it('CLEAR_DATA sends message and resets count', () => {
+    it('CLEAR_DATA sends message', () => {
         const sentMessages: any[] = [];
         mockChrome.runtime.sendMessage.mockImplementation((msg: any) => {
             sentMessages.push(msg);
@@ -230,7 +172,7 @@ describe('toggle switch behavior', () => {
 
     it('disables sniffing when toggled off without clearing count', async () => {
         const sentMessages: any[] = [];
-        mockChrome.storage.local.set.mockImplementation(async () => {});
+        mockChrome.storage.local.set.mockImplementationOnce(async () => {});
         mockChrome.runtime.sendMessage.mockImplementation((msg: any) => {
             sentMessages.push(msg);
             return Promise.resolve();
@@ -240,6 +182,5 @@ describe('toggle switch behavior', () => {
         mockChrome.runtime.sendMessage({ type: 'STOP_SNIFFING' });
 
         expect(sentMessages[0].type).toBe('STOP_SNIFFING');
-        // Should NOT clear the request count — user can still save/clear data
     });
 });

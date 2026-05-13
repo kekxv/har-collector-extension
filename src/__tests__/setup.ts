@@ -72,10 +72,6 @@ export const mockChrome = {
     downloads: {
         download: vi.fn((_options: any, callback: (id: number) => void) => { if (callback) callback(1); }),
     },
-    offscreen: {
-        createDocument: vi.fn().mockResolvedValue(undefined),
-        Reason: { BLOBS: 'blobs' as any },
-    },
     alarms: {
         create: vi.fn(),
         onAlarm: { addListener: vi.fn(), removeListener: vi.fn() },
@@ -106,5 +102,4 @@ beforeEach(() => {
     mockChrome.tabs.query.mockClear();
     mockChrome.tabs.create.mockClear();
     mockChrome.downloads.download.mockClear();
-    mockChrome.offscreen.createDocument.mockClear();
 });

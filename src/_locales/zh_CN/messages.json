@@ -27,9 +27,13 @@
     "message": "已捕获请求",
     "description": "请求计数标签"
   },
+  "openManagement": {
+    "message": "打开管理页",
+    "description": "打开管理/下载页面按钮"
+  },
   "saveHarButton": {
     "message": "保存为 HAR",
-    "description": "保存按钮文字"
+    "description": "管理页保存按钮文字"
   },
   "clearDataButton": {
     "message": "清除数据",
@@ -43,13 +47,81 @@
     "message": "HarCollector - 下载中...",
     "description": "兜底页标题"
   },
+  "fallbackInitTitle": {
+    "message": "准备下载...",
+    "description": "下载初始化标题"
+  },
+  "fallbackInitMsg": {
+    "message": "正在分析捕获的数据...",
+    "description": "初始化状态"
+  },
+  "fallbackDownloadTitle": {
+    "message": "正在下载 HAR 文件",
+    "description": "下载中标题"
+  },
+  "fallbackTotalInfo": {
+    "message": "{count} 条记录 · {files} 个文件",
+    "description": "总记录数和文件数"
+  },
+  "fallbackChunkProgress": {
+    "message": "第 {current}/{total} 个文件",
+    "description": "分块进度文本"
+  },
+  "fallbackRequestingChunk": {
+    "message": "正在请求第 {current}/{total} 个文件...",
+    "description": "请求分块消息"
+  },
+  "fallbackFileStatusPending": {
+    "message": "等待中",
+    "description": "文件等待状态"
+  },
+  "fallbackFileStatusPreparing": {
+    "message": "准备中",
+    "description": "文件准备状态"
+  },
+  "fallbackFileStatusDownloading": {
+    "message": "下载中",
+    "description": "文件下载状态"
+  },
+  "fallbackFileStatusDone": {
+    "message": "完成",
+    "description": "文件完成状态"
+  },
+  "fallbackFileStatusError": {
+    "message": "错误",
+    "description": "文件错误状态"
+  },
+  "fallbackAllDone": {
+    "message": "所有文件已下载完成！",
+    "description": "下载成功标题"
+  },
+  "fallbackTotalEntries": {
+    "message": "已保存 {count} 条记录",
+    "description": "总保存记录数副标题"
+  },
+  "fallbackAutoClose": {
+    "message": "3 秒后自动关闭...",
+    "description": "自动关闭倒计时"
+  },
+  "fallbackStats": {
+    "message": "{files} 个文件 · 共 {size}",
+    "description": "下载统计信息"
+  },
+  "fallbackChunkError": {
+    "message": "第 {index} 块失败：{error}",
+    "description": "分块错误消息"
+  },
+  "fallbackDownloadError": {
+    "message": "第 {index} 个文件下载失败：{error}",
+    "description": "下载错误消息"
+  },
   "fallbackPreparing": {
     "message": "准备下载...",
-    "description": "兜底页标题"
+    "description": "兜底页标题（旧版）"
   },
   "fallbackRetrieving": {
     "message": "正在获取 HAR 数据...",
-    "description": "兜底页状态文字"
+    "description": "兜底页状态文字（旧版）"
   },
   "fallbackRetryMsg": {
     "message": "正在获取 HAR 数据（第 {attempt}/{total} 次尝试）...",
@@ -57,11 +129,11 @@
   },
   "fallbackDownloadStarted": {
     "message": "下载已开始",
-    "description": "兜底页成功标题"
+    "description": "兜底页成功标题（旧版）"
   },
   "fallbackDownloading": {
     "message": "HAR 文件正在下载...",
-    "description": "兜底页成功提示"
+    "description": "兜底页成功提示（旧版）"
   },
   "fallbackDownloadFailed": {
     "message": "下载失败",
@@ -75,12 +147,12 @@
     "message": "意外错误：{error}",
     "description": "兜底页错误提示"
   },
-  "offscreenReason": {
-    "message": "用于保存 HAR 文件",
-    "description": "离屏文档用途"
+  "splitFiles": {
+    "message": "大数据时分文件导出",
+    "description": "分文件导出复选框标签"
   },
-  "offscreenJustification": {
-    "message": "创建 Blob URL 以下载 HAR 文件。",
-    "description": "离屏文档详细说明"
+  "loadMore": {
+    "message": "加载更多",
+    "description": "加载更多请求按钮文字"
   }
 }

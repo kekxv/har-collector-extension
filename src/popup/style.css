@@ -127,7 +127,7 @@ h1 {
     font-weight: 500;
 }
 
-p {
+.summary {
     margin: 0;
     text-align: center;
     font-size: 14px;
@@ -171,26 +171,4 @@ p {
     background-color: #b0c4de;
     cursor: not-allowed;
     opacity: 0.7;
-}
-
-/* Loading spinner on button */
-.actions button[data-loading="true"] {
-    cursor: wait;
-}
-
-.actions button[data-loading="true"]::after {
-    content: "";
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border: 2px solid rgba(255,255,255,0.3);
-    border-top-color: #fff;
-    border-radius: 50%;
-    animation: btn-spin 0.6s linear infinite;
-    margin-left: 6px;
-    vertical-align: middle;
-}
-
-@keyframes btn-spin {
-    to { transform: rotate(360deg); }
 }
