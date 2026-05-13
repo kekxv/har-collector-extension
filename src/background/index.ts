@@ -1,13 +1,14 @@
-// src/background/index.ts
+/* src/background/index.ts */
+import { buildHarLog } from '../lib/har-builder.js';
 
 console.log("Background service worker started.");
 
 const protocolVersion = "1.3";
 
-// 状态管理：仅用于内存缓存，核心状态应从 storage 恢复
+// State management: in-memory cache only, core state restored from storage
 let debugTargets = new Set<number>();
 
-// 初始化：检查现有的调试目标
+// Initialize: check existing debug targets
 async function initialize() {
     const targets = await chrome.debugger.getTargets();
     for (const target of targets) {
@@ -15,16 +16,16 @@ async function initialize() {
             debugTargets.add(target.tabId);
         }
     }
-    updateRequestCount();
+    updateRequestCount().catch(e => console.error("Failed to update request count on init:", e));
 }
 
 initialize();
 
-// IndexedDB 配置
+// --- IndexedDB ---
 const DB_NAME = 'HarCollectorDB';
 const STORE_NAME = 'requests';
 
-async function openDB(): Promise<IDBDatabase> {
+function openDB(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, 1);
         request.onupgradeneeded = () => {
@@ -39,68 +40,106 @@ async function openDB(): Promise<IDBDatabase> {
 }
 
 async function saveRequest(tabId: number, requestId: string, data: any) {
-    const db = await openDB();
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const existing = await new Promise<any>((resolve) => {
-        const req = store.get([tabId, requestId]);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => resolve(null);
-    });
+    try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        const existing = await new Promise<any>((resolve, reject) => {
+            const req = store.get([tabId, requestId]);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
 
-    const newData = existing ? { ...existing, ...data } : { tabId, requestId, ...data };
-    store.put(newData);
-    await new Promise((resolve) => { tx.oncomplete = resolve; });
-    db.close();
+        const newData = existing ? { ...existing, ...data } : { tabId, requestId, ...data };
+        store.put(newData);
+        await new Promise((resolve) => { tx.oncomplete = resolve; });
+        db.close();
+    } catch (e) {
+        console.error("IndexedDB saveRequest failed:", e);
+    }
 }
 
 async function getAllRequests(): Promise<any[]> {
     const db = await openDB();
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const result = await new Promise<any[]>((resolve) => {
-        const req = store.getAll();
-        req.onsuccess = () => resolve(req.result || []);
-        req.onerror = () => resolve([]);
-    });
-    db.close();
-    return result;
+    try {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const store = tx.objectStore(STORE_NAME);
+        const result = await new Promise<any[]>((resolve, reject) => {
+            const req = store.getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+        });
+        return result;
+    } finally {
+        db.close();
+    }
 }
 
 async function clearAllData() {
-    const db = await openDB();
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).clear();
-    await new Promise((resolve) => { tx.oncomplete = resolve; });
-    db.close();
-    await chrome.storage.local.set({ requestCount: 0 });
-    chrome.runtime.sendMessage({ type: 'UPDATE_COUNT', count: 0 }).catch(() => {});
+    try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).clear();
+        await new Promise((resolve) => { tx.oncomplete = resolve; });
+        db.close();
+        await chrome.storage.local.set({ requestCount: 0 });
+        chrome.runtime.sendMessage({ type: 'UPDATE_COUNT', count: 0 }).catch(() => {});
+    } catch (e) {
+        console.error("IndexedDB clearAllData failed:", e);
+    }
 }
 
-// 初始化
+// --- Chrome compatibility check ---
+function checkChromeCompatibility(): { offscreen: boolean; getContexts: boolean } {
+    const hasOffscreen = typeof chrome.offscreen?.createDocument === 'function';
+    const hasGetContexts = typeof (chrome.runtime as any).getContexts === 'function';
+    return { offscreen: hasOffscreen, getContexts: hasGetContexts };
+}
+
+// --- Init ---
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.local.set({ isEnabled: false, requestCount: 0 });
 });
 
-// 监听消息
+// --- Message listener ---
 chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
     if (message.type === 'START_SNIFFING') {
-        startSniffing();
+        startSniffing().catch(e => console.error("startSniffing failed:", e));
     } else if (message.type === 'STOP_SNIFFING') {
-        stopSniffing();
+        stopSniffing().catch(e => console.error("stopSniffing failed:", e));
     } else if (message.type === 'CLEAR_DATA') {
-        clearAllData();
+        clearAllData().catch(e => console.error("clearAllData failed:", e));
     } else if (message.type === 'SAVE_HAR') {
-        saveHar();
+        saveHar().catch(e => {
+            console.error("saveHar failed:", e);
+            notifyPopup('error', `Failed to save HAR: ${e instanceof Error ? e.message : String(e)}`);
+        });
+    } else if (message.type === 'FALLBACK_REQUEST_DATA') {
+        // Fallback page requests HAR data
+        handleFallbackRequestData().then(data => {
+            _sendResponse(data);
+        }).catch(e => {
+            console.error("FALLBACK_REQUEST_DATA failed:", e);
+            _sendResponse({ error: e instanceof Error ? e.message : String(e) });
+        });
+        return true;
+    } else if (message.type === 'GET_DEBUGGER_CONFLICTS') {
+        _sendResponse({ conflicts: debuggerConflicts });
+        debuggerConflicts = [];
+        return true;
     }
     return true;
 });
 
-// 监听标签更新，实现自动挂载
+// --- Tab lifecycle ---
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    const { isEnabled } = await chrome.storage.local.get('isEnabled');
-    if (isEnabled && changeInfo.status === 'loading' && tab.url?.startsWith('http')) {
-        attachDebugger(tabId);
+    try {
+        const { isEnabled } = await chrome.storage.local.get('isEnabled');
+        if (isEnabled && changeInfo.status === 'loading' && tab.url?.startsWith('http')) {
+            attachDebuggerWithResult(tabId).catch(e => console.error("attachDebuggerWithResult failed:", e));
+        }
+    } catch (e) {
+        console.error("onUpdated listener failed:", e);
     }
 });
 
@@ -108,7 +147,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     if (debugTargets.has(tabId)) {
         chrome.debugger.detach({ tabId }).catch(() => {});
         debugTargets.delete(tabId);
-        updateRequestCount();
+        updateRequestCount().catch(e => console.error("updateRequestCount failed:", e));
     }
 });
 
@@ -119,12 +158,13 @@ chrome.debugger.onDetach.addListener((source) => {
     }
 });
 
+// --- Sniffing ---
 async function startSniffing() {
     await chrome.storage.local.set({ isEnabled: true });
     const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
     for (const tab of tabs) {
         if (tab.id) {
-            attachDebugger(tab.id);
+            await attachDebuggerWithResult(tab.id);
         }
     }
     console.log(`Sniffing enabled for ${tabs.length} tabs.`);
@@ -132,7 +172,6 @@ async function startSniffing() {
 
 async function stopSniffing() {
     await chrome.storage.local.set({ isEnabled: false });
-    // 断开所有已连接的调试器
     const targets = await chrome.debugger.getTargets();
     for (const target of targets) {
         if (target.attached && target.tabId) {
@@ -143,130 +182,132 @@ async function stopSniffing() {
     console.log("Sniffing stopped, all debuggers detached.");
 }
 
-function attachDebugger(tabId: number) {
-    if (debugTargets.has(tabId)) return;
+// Debugger conflict notifications
+let debuggerConflicts: Array<{ tabId: number; message: string }> = [];
 
-    chrome.debugger.attach({ tabId }, protocolVersion, () => {
-        if (chrome.runtime.lastError) {
-            console.warn(`Attach error for tab ${tabId}: ${chrome.runtime.lastError.message}`);
-            return;
-        }
-        debugTargets.add(tabId);
-        console.log(`Debugger attached to tab ${tabId}`);
-        chrome.debugger.sendCommand({ tabId }, "Network.enable", {}).catch(e => console.error(e));
+async function attachDebuggerWithResult(tabId: number): Promise<{ success: boolean; tabId: number; message?: string }> {
+    if (debugTargets.has(tabId)) return { success: true, tabId };
+
+    return new Promise((resolve) => {
+        chrome.debugger.attach({ tabId }, protocolVersion, () => {
+            if (chrome.runtime.lastError) {
+                const msg = chrome.runtime.lastError.message || 'Unknown error';
+                console.warn(`Attach failed for tab ${tabId}: ${msg}`);
+                debuggerConflicts.push({ tabId, message: msg });
+                resolve({ success: false, tabId, message: msg });
+                return;
+            }
+            debugTargets.add(tabId);
+            chrome.debugger.sendCommand({ tabId }, "Network.enable", {}).catch(e => console.error("Network.enable failed:", e));
+            resolve({ success: true, tabId });
+        });
     });
 }
 
-// 核心：处理调试器事件并存入 IndexedDB
+// --- Debugger events ---
 chrome.debugger.onEvent.addListener(async (source, method, params) => {
     const tabId = source.tabId;
     if (!tabId) return;
 
-    if (method === "Network.requestWillBeSent") {
-        const { requestId, request, timestamp, wallTime } = params as any;
-        await saveRequest(tabId, requestId, {
-            url: request.url,
-            request,
-            responses: [],
-            startedDateTime: new Date(wallTime * 1000).toISOString(),
-            startTime: timestamp,
-        });
-    } else if (method === "Network.responseReceived") {
-        const { requestId, response, timestamp } = params as any;
-        await saveRequest(tabId, requestId, {
-            response,
-            endTime: timestamp,
-        });
-    } else if (method === "Network.loadingFinished") {
-        const { requestId, encodedDataLength } = params as any;
-        
-        // 尝试获取响应体
-        chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", { requestId }, async (result: any) => {
-            const updateData: any = { encodedDataLength };
-            if (!chrome.runtime.lastError && result) {
-                updateData.responseBody = result.body;
-                updateData.base64Encoded = result.base64Encoded;
-            }
-            await saveRequest(tabId, requestId, updateData);
-            updateRequestCount();
-        });
+    try {
+        if (method === "Network.requestWillBeSent") {
+            const { requestId, request, timestamp, wallTime } = params as any;
+            await saveRequest(tabId, requestId, {
+                url: request.url,
+                request,
+                responses: [],
+                startedDateTime: new Date(wallTime * 1000).toISOString(),
+                startTime: timestamp,
+            });
+        } else if (method === "Network.responseReceived") {
+            const { requestId, response, timestamp } = params as any;
+            await saveRequest(tabId, requestId, {
+                response,
+                endTime: timestamp,
+            });
+        } else if (method === "Network.loadingFinished") {
+            const { requestId, encodedDataLength } = params as any;
+
+            chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", { requestId }, async (result: any) => {
+                const updateData: any = { encodedDataLength };
+                if (!chrome.runtime.lastError && result) {
+                    updateData.responseBody = result.body;
+                    updateData.base64Encoded = result.base64Encoded;
+                }
+                await saveRequest(tabId, requestId, updateData);
+                updateRequestCount().catch(e => console.error("updateRequestCount failed:", e));
+            });
+        }
+    } catch (e) {
+        console.error(`onEvent handler failed for tab ${tabId}, method ${method}:`, e);
     }
 });
 
 async function updateRequestCount() {
-    const all = await getAllRequests();
-    await chrome.storage.local.set({ requestCount: all.length });
-    chrome.runtime.sendMessage({ type: 'UPDATE_COUNT', count: all.length }).catch(() => {});
+    try {
+        const all = await getAllRequests();
+        await chrome.storage.local.set({ requestCount: all.length });
+        chrome.runtime.sendMessage({ type: 'UPDATE_COUNT', count: all.length }).catch(() => {});
+    } catch (e) {
+        console.error("updateRequestCount failed:", e);
+    }
 }
 
+// --- Notification helper ---
+function notifyPopup(level: 'error' | 'success' | 'info', message: string) {
+    chrome.runtime.sendMessage({ type: 'NOTIFICATION', level, message }).catch(() => {});
+}
+
+// --- Fallback data handler ---
+async function handleFallbackRequestData(): Promise<{ entries: any[]; harLog: any; count: number } | { error: string }> {
+    try {
+        const allRequests = await getAllRequests();
+        if (allRequests.length === 0) {
+            return { error: "No requests captured" };
+        }
+
+        const harLog = buildHarLog(allRequests);
+
+        return { entries: harLog.log.entries, harLog, count: allRequests.length };
+    } catch (e) {
+        return { error: e instanceof Error ? e.message : String(e) };
+    }
+}
+
+// --- saveHar: 3-layer approach ---
 async function saveHar() {
+    // Layer 1: Data validation
     const allRequests = await getAllRequests();
     if (allRequests.length === 0) {
+        notifyPopup('info', 'No requests captured to save.');
         console.log("No requests captured to save.");
         return;
     }
 
-    const harLog = {
-        log: {
-            version: "1.2",
-            creator: { name: "HarCollector Extension", version: "1.0.1" },
-            pages: [],
-            entries: allRequests.filter(r => r.response).map(req => {
-                const time = (req.endTime - req.startTime) * 1000;
-                const bodyText = req.responseBody || "";
-                let contentSize = bodyText.length;
-                if (req.base64Encoded) {
-                    try {
-                        contentSize = atob(bodyText).length;
-                    } catch (e) {
-                        contentSize = bodyText.length;
-                    }
-                }
-
-                return {
-                    startedDateTime: req.startedDateTime,
-                    time: time > 0 ? time : 0,
-                    request: {
-                        method: req.request.method,
-                        url: req.request.url,
-                        httpVersion: "HTTP/2.0",
-                        cookies: [],
-                        headers: Object.entries(req.request.headers).map(([name, value]) => ({ name, value: String(value) })),
-                        queryString: [],
-                        postData: req.request.postData ? {
-                            mimeType: req.request.headers['Content-Type'] || '',
-                            text: req.request.postData
-                        } : undefined,
-                        headersSize: -1,
-                        bodySize: req.request.postData ? req.request.postData.length : 0,
-                    },
-                    response: {
-                        status: req.response.status,
-                        statusText: req.response.statusText,
-                        httpVersion: "HTTP/2.0",
-                        cookies: [],
-                        headers: Object.entries(req.response.headers).map(([name, value]) => ({ name, value: String(value) })),
-                        content: {
-                            size: contentSize,
-                            mimeType: req.response.mimeType,
-                            text: req.responseBody,
-                            encoding: req.base64Encoded ? "base64" : undefined,
-                        },
-                        redirectURL: req.response.headers['Location'] || req.response.headers['location'] || '',
-                        headersSize: -1,
-                        bodySize: req.encodedDataLength || 0,
-                    },
-                    cache: {},
-                    timings: { send: -1, wait: -1, receive: -1, ssl: -1, connect: -1, dns: -1, blocked: -1 },
-                };
-            }),
-        },
-    };
+    const harLog = buildHarLog(allRequests);
 
     const harString = JSON.stringify(harLog, null, 2);
     const safeFilename = `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`;
 
-    // 确保 Offscreen Document 存在
+    // Layer 2: Offscreen download (with compatibility check)
+    const compat = checkChromeCompatibility();
+    if (compat.offscreen && compat.getContexts) {
+        try {
+            const success = await tryOffscreenDownload(harString, safeFilename);
+            if (success) {
+                notifyPopup('success', `HAR file saved (${allRequests.length} entries).`);
+                return;
+            }
+        } catch (e) {
+            console.warn("Offscreen download failed, falling back:", e);
+        }
+    }
+
+    // Layer 3: Fallback page download
+    await tryFallbackPageDownload(harString, safeFilename);
+}
+
+async function tryOffscreenDownload(harString: string, safeFilename: string): Promise<boolean> {
     const offscreenUrl = chrome.runtime.getURL('src/offscreen/index.html');
     const existingContexts = await (chrome.runtime as any).getContexts({
         contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [offscreenUrl]
@@ -280,21 +321,61 @@ async function saveHar() {
         });
     }
 
-    try {
-        const response = await chrome.runtime.sendMessage({
-            type: 'create-blob-url',
-            target: 'offscreen',
-            data: harString,
-        });
+    const response = await chrome.runtime.sendMessage({
+        type: 'create-blob-url',
+        target: 'offscreen',
+        data: harString,
+    });
 
-        if (response && response.url) {
-            chrome.downloads.download({
-                url: response.url,
-                filename: safeFilename,
-                saveAs: true,
-            });
+    if (!response || !response.url) {
+        throw new Error("Offscreen document did not return a blob URL");
+    }
+
+    return new Promise((resolve) => {
+        chrome.downloads.download({
+            url: response.url,
+            filename: safeFilename,
+            saveAs: true,
+        }, (downloadId) => {
+            if (chrome.runtime.lastError) {
+                console.error("Offscreen download failed:", chrome.runtime.lastError.message);
+                resolve(false);
+            } else {
+                console.log("Offscreen download started, ID:", downloadId);
+                resolve(true);
+            }
+        });
+    });
+}
+
+async function tryFallbackPageDownload(harString: string, safeFilename: string): Promise<void> {
+    console.log("Opening fallback download page...");
+    // Store HAR data temporarily for fallback page to retrieve
+    await chrome.storage.local.set({ _pendingHarDownload: { harString, safeFilename } });
+
+    const fallbackUrl = chrome.runtime.getURL('src/fallback/index.html');
+    await chrome.tabs.create({ url: fallbackUrl, active: true });
+
+    notifyPopup('info', 'Opening fallback page to download HAR...');
+}
+
+// --- Service Worker keepalive ---
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === 'keepalive') {
+        handleKeepalive().catch(e => console.error("keepalive failed:", e));
+    }
+});
+
+async function handleKeepalive() {
+    // Re-attach debuggers that may have been lost
+    const { isEnabled } = await chrome.storage.local.get('isEnabled');
+    if (!isEnabled) return;
+
+    const targets = await chrome.debugger.getTargets();
+    for (const target of targets) {
+        if (target.tabId && target.attached && !debugTargets.has(target.tabId)) {
+            debugTargets.add(target.tabId);
+            console.log(`Reconnected debugger for tab ${target.tabId} during keepalive`);
         }
-    } catch (e) {
-        console.error("Failed to get a blob URL from offscreen document:", e);
     }
 }

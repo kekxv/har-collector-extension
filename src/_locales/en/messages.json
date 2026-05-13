@@ -1,0 +1,86 @@
+{
+  "extName": {
+    "message": "HarCollector - Network Inspector",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "Captures and saves network requests as HAR files.",
+    "description": "Extension description"
+  },
+  "actionTitle": {
+    "message": "HarCollector",
+    "description": "Extension action tooltip"
+  },
+  "popupTitle": {
+    "message": "HarCollector",
+    "description": "Popup window title"
+  },
+  "sniffingEnabled": {
+    "message": "Sniffing Enabled",
+    "description": "Status when sniffing is on"
+  },
+  "sniffingDisabled": {
+    "message": "Sniffing Disabled",
+    "description": "Status when sniffing is off"
+  },
+  "capturedRequests": {
+    "message": "Captured Requests",
+    "description": "Label for request counter"
+  },
+  "saveHarButton": {
+    "message": "Save as HAR",
+    "description": "Save button text"
+  },
+  "clearDataButton": {
+    "message": "Clear Data",
+    "description": "Clear button text"
+  },
+  "savingButton": {
+    "message": "Saving...",
+    "description": "Save button loading text"
+  },
+  "fallbackTitle": {
+    "message": "HarCollector - Downloading...",
+    "description": "Fallback page title"
+  },
+  "fallbackPreparing": {
+    "message": "Preparing download...",
+    "description": "Fallback page heading"
+  },
+  "fallbackRetrieving": {
+    "message": "Retrieving HAR data...",
+    "description": "Fallback status message"
+  },
+  "fallbackRetryMsg": {
+    "message": "Retrieving HAR data (attempt {attempt}/{total})...",
+    "description": "Fallback retry message. {attempt} and {total} are placeholders."
+  },
+  "fallbackDownloadStarted": {
+    "message": "Download started",
+    "description": "Fallback success heading"
+  },
+  "fallbackDownloading": {
+    "message": "Your HAR file is downloading...",
+    "description": "Fallback success message"
+  },
+  "fallbackDownloadFailed": {
+    "message": "Download failed",
+    "description": "Fallback error heading"
+  },
+  "fallbackNoData": {
+    "message": "Could not retrieve HAR data. Please try again.",
+    "description": "Fallback no data message"
+  },
+  "fallbackUnexpectedError": {
+    "message": "Unexpected error: {error}",
+    "description": "Fallback unexpected error message. {error} is the error text."
+  },
+  "offscreenReason": {
+    "message": "For saving HAR files",
+    "description": "Offscreen document justification"
+  },
+  "offscreenJustification": {
+    "message": "To create a blob URL for downloading the HAR file.",
+    "description": "Offscreen document justification detail"
+  }
+}

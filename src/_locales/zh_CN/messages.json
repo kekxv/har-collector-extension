@@ -1,0 +1,86 @@
+{
+  "extName": {
+    "message": "HarCollector 网络抓包工具",
+    "description": "扩展名称"
+  },
+  "extDescription": {
+    "message": "捕获并保存网络请求为 HAR 文件。",
+    "description": "扩展描述"
+  },
+  "actionTitle": {
+    "message": "HarCollector",
+    "description": "扩展图标提示"
+  },
+  "popupTitle": {
+    "message": "HarCollector",
+    "description": "弹窗标题"
+  },
+  "sniffingEnabled": {
+    "message": "监听已开启",
+    "description": "监听开启时的状态文本"
+  },
+  "sniffingDisabled": {
+    "message": "监听已关闭",
+    "description": "监听关闭时的状态文本"
+  },
+  "capturedRequests": {
+    "message": "已捕获请求",
+    "description": "请求计数标签"
+  },
+  "saveHarButton": {
+    "message": "保存为 HAR",
+    "description": "保存按钮文字"
+  },
+  "clearDataButton": {
+    "message": "清除数据",
+    "description": "清除按钮文字"
+  },
+  "savingButton": {
+    "message": "保存中...",
+    "description": "保存按钮加载中的文字"
+  },
+  "fallbackTitle": {
+    "message": "HarCollector - 下载中...",
+    "description": "兜底页标题"
+  },
+  "fallbackPreparing": {
+    "message": "准备下载...",
+    "description": "兜底页标题"
+  },
+  "fallbackRetrieving": {
+    "message": "正在获取 HAR 数据...",
+    "description": "兜底页状态文字"
+  },
+  "fallbackRetryMsg": {
+    "message": "正在获取 HAR 数据（第 {attempt}/{total} 次尝试）...",
+    "description": "兜底页重试提示"
+  },
+  "fallbackDownloadStarted": {
+    "message": "下载已开始",
+    "description": "兜底页成功标题"
+  },
+  "fallbackDownloading": {
+    "message": "HAR 文件正在下载...",
+    "description": "兜底页成功提示"
+  },
+  "fallbackDownloadFailed": {
+    "message": "下载失败",
+    "description": "兜底页失败标题"
+  },
+  "fallbackNoData": {
+    "message": "无法获取 HAR 数据，请重试。",
+    "description": "兜底页无数据提示"
+  },
+  "fallbackUnexpectedError": {
+    "message": "意外错误：{error}",
+    "description": "兜底页错误提示"
+  },
+  "offscreenReason": {
+    "message": "用于保存 HAR 文件",
+    "description": "离屏文档用途"
+  },
+  "offscreenJustification": {
+    "message": "创建 Blob URL 以下载 HAR 文件。",
+    "description": "离屏文档详细说明"
+  }
+}
