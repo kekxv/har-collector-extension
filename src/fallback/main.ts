@@ -180,14 +180,12 @@ function renderPagination() {
     }
     paginationEl.style.display = 'flex';
 
-    // Prev button
     const prevBtn = document.createElement('button');
     prevBtn.textContent = '‹ Prev';
     prevBtn.disabled = currentPage <= 1;
     prevBtn.addEventListener('click', () => goToPage(currentPage - 1));
     paginationEl.appendChild(prevBtn);
 
-    // Page numbers
     const maxVisible = 5;
     let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
     let endPage = Math.min(totalPages, startPage + maxVisible - 1);
@@ -229,14 +227,12 @@ function renderPagination() {
         paginationEl.appendChild(lastBtn);
     }
 
-    // Next button
     const nextBtn = document.createElement('button');
     nextBtn.textContent = 'Next ›';
     nextBtn.disabled = currentPage >= totalPages;
     nextBtn.addEventListener('click', () => goToPage(currentPage + 1));
     paginationEl.appendChild(nextBtn);
 
-    // Page info
     const info = document.createElement('span');
     info.className = 'page-info';
     info.textContent = `${currentPage} / ${totalPages}`;
@@ -249,35 +245,52 @@ async function goToPage(page: number) {
     currentPage = page;
     const offset = (page - 1) * PAGE_SIZE;
     try {
-        const response = await chrome.runtime.sendMessage({
-            type: 'GET_REQUEST_LIST',
-            offset,
-            limit: PAGE_SIZE,
-        });
-        if (response && response.items) {
-            renderRequestList(response.items);
-            renderPagination();
-        }
-    } catch { /* ignore */ }
+        // Try direct IndexedDB first
+        const { getRequestList } = await import('./har-builder-direct.js');
+        const response = await getRequestList(offset, PAGE_SIZE);
+        renderRequestList(response.items);
+        renderPagination();
+    } catch {
+        // Fallback to message
+        try {
+            const response = await chrome.runtime.sendMessage({
+                type: 'GET_REQUEST_LIST',
+                offset,
+                limit: PAGE_SIZE,
+            });
+            if (response && response.items) {
+                renderRequestList(response.items);
+                renderPagination();
+            }
+        } catch { /* ignore */ }
+    }
 }
 
 async function loadRequestList() {
     try {
-        const response = await chrome.runtime.sendMessage({
-            type: 'GET_REQUEST_LIST',
-            offset: 0,
-            limit: PAGE_SIZE,
-        });
-        if (response && response.items) {
-            totalRecords = response.total;
-            renderRequestList(response.items);
-            renderPagination();
-        }
-    } catch { /* ignore */ }
+        const { getRequestList } = await import('./har-builder-direct.js');
+        const response = await getRequestList(0, PAGE_SIZE);
+        totalRecords = response.total;
+        renderRequestList(response.items);
+        renderPagination();
+    } catch {
+        try {
+            const response = await chrome.runtime.sendMessage({
+                type: 'GET_REQUEST_LIST',
+                offset: 0,
+                limit: PAGE_SIZE,
+            });
+            if (response && response.items) {
+                totalRecords = response.total;
+                renderRequestList(response.items);
+                renderPagination();
+            }
+        } catch { /* ignore */ }
+    }
 }
 
 // --- Download flow ---
-async function processChunks(meta: { totalCount: number; totalChunks: number; baseFilename: string }) {
+async function processChunksDirect(meta: { totalCount: number; totalChunks: number; baseFilename: string }) {
     totalCount = meta.totalCount;
     totalChunks = meta.totalChunks;
     baseFilename = meta.baseFilename;
@@ -301,15 +314,140 @@ async function processChunks(meta: { totalCount: number; totalChunks: number; ba
     let successCount = 0;
     let hasMore = true;
     let chunkNum = 1;
+    let resumeKey: [number, string] | null = null;
 
     // For single-file mode: collect all chunks, merge at the end
     const allChunks: { json: string; entryCount: number }[] = [];
 
+    const { buildHarChunk } = await import('./har-builder-direct.js');
+
     while (hasMore) {
-        // Dynamic total for display
         const displayTotal = Math.max(totalChunks, chunkNum);
 
-        // Add new file item if beyond initial estimate
+        if (chunkNum > totalChunks) {
+            const filename = baseFilename.replace('.har', displayTotal > 1 ? `-${String(chunkNum).padStart(3, '0')}.har` : '.har');
+            addFileItem(filename, 'preparing');
+        }
+
+        const filename = baseFilename.replace('.har', displayTotal > 1 ? `-${String(chunkNum).padStart(3, '0')}.har` : '.har');
+        updateFileStatus(filename, 'downloading');
+        setProgress(chunkNum, displayTotal);
+        progressText.textContent = `Building file ${chunkNum} of ${displayTotal}...`;
+
+        try {
+            const { result, nextKey } = await buildHarChunk(chunkNum, useSplitFiles, resumeKey);
+
+            if (!result) {
+                setError(`No entries for chunk ${chunkNum}`);
+                return;
+            }
+
+            resumeKey = nextKey;
+
+            allChunks.push({ json: result.json, entryCount: result.entryCount });
+            totalBytes += result.json.length;
+            successCount++;
+
+            if (result.total > totalChunks) {
+                totalChunks = result.total;
+                progressSubtitleEl.textContent = `${totalCount} entries · ${totalChunks} file${totalChunks > 1 ? 's' : ''}`;
+            }
+
+            if (useSplitFiles) {
+                await downloadChunk(result.json, result.filename);
+                updateFileStatus(filename, 'done');
+
+                const item = document.getElementById(`file-${filename}`);
+                if (item && result.filename !== filename) {
+                    item.id = `file-${result.filename}`;
+                    const statusId = `file-status-${filename}`;
+                    const statusEl = document.getElementById(statusId);
+                    if (statusEl) {
+                        statusEl.id = `file-status-${result.filename}`;
+                        const nameSpan = item.querySelector('span');
+                        if (nameSpan) nameSpan.textContent = result.filename;
+                    }
+                }
+            } else {
+                updateFileStatus(filename, 'done');
+            }
+
+            hasMore = result.hasMore;
+            chunkNum++;
+        } catch (e) {
+            updateFileStatus(filename, 'error');
+            setError(`Failed to build file ${chunkNum}: ${e instanceof Error ? e.message : String(e)}`);
+            return;
+        }
+    }
+
+    // For single-file mode: merge all chunks and download as one file
+    if (!useSplitFiles) {
+        const mergedEntries: any[] = [];
+        for (const c of allChunks) {
+            try {
+                const parsed = JSON.parse(c.json);
+                mergedEntries.push(...parsed.log.entries);
+            } catch { /* skip */ }
+        }
+        const mergedJson = JSON.stringify({
+            log: {
+                version: "1.2",
+                creator: { name: "HarCollector Extension", version: "1.0.5" },
+                pages: [],
+                entries: mergedEntries,
+            },
+        }, null, 2);
+
+        for (let i = 1; i <= allChunks.length; i++) {
+            const fname = baseFilename.replace('.har', allChunks.length > 1 ? `-${String(i).padStart(3, '0')}.har` : '.har');
+            updateFileStatus(fname, 'downloading');
+        }
+
+        await downloadChunk(mergedJson, baseFilename);
+        progressText.textContent = `Merged ${mergedEntries.length} entries into 1 file`;
+        progressFill.style.width = '100%';
+        totalBytes = mergedJson.length;
+
+        for (let i = 1; i <= allChunks.length; i++) {
+            const fname = baseFilename.replace('.har', allChunks.length > 1 ? `-${String(i).padStart(3, '0')}.har` : '.har');
+            updateFileStatus(fname, 'done');
+        }
+    }
+
+    statsEl.textContent = `${successCount} part${successCount > 1 ? 's' : ''} · ${formatBytes(totalBytes)} total`;
+    setSuccess();
+}
+
+// --- Message-based fallback download ---
+async function processChunksFallback(meta: { totalCount: number; totalChunks: number; baseFilename: string }) {
+    totalCount = meta.totalCount;
+    totalChunks = meta.totalChunks;
+    baseFilename = meta.baseFilename;
+
+    showSpinner(false);
+    titleEl.textContent = msg('fallbackDownloadTitle') || 'Downloading HAR files';
+    progressSubtitleEl.textContent = `${totalCount} entries · ${totalChunks} file${totalChunks > 1 ? 's' : ''}`;
+    fileListEl.innerHTML = '';
+    statsEl.textContent = '';
+    messageEl.textContent = '';
+    closePageBtn.style.display = 'none';
+    backToListBtn.style.display = 'none';
+
+    for (let i = 1; i <= totalChunks; i++) {
+        const filename = baseFilename.replace('.har', totalChunks > 1 ? `-${String(i).padStart(3, '0')}.har` : '.har');
+        addFileItem(filename, i === 1 ? 'preparing' : 'pending');
+    }
+
+    let totalBytes = 0;
+    let successCount = 0;
+    let hasMore = true;
+    let chunkNum = 1;
+    const allChunks: { json: string; entryCount: number }[] = [];
+
+    while (hasMore) {
+        const displayTotal = Math.max(totalChunks, chunkNum);
+
         if (chunkNum > totalChunks) {
             const filename = baseFilename.replace('.har', displayTotal > 1 ? `-${String(chunkNum).padStart(3, '0')}.har` : '.har');
             addFileItem(filename, 'preparing');
@@ -333,7 +471,6 @@ async function processChunks(meta: { totalCount: number; totalChunks: number; ba
                 return;
             }
 
-            // Update total chunks from backend (may differ from initial estimate)
             if (chunk.total > totalChunks) {
                 totalChunks = chunk.total;
                 progressSubtitleEl.textContent = `${totalCount} entries · ${totalChunks} file${totalChunks > 1 ? 's' : ''}`;
@@ -343,12 +480,9 @@ async function processChunks(meta: { totalCount: number; totalChunks: number; ba
             totalBytes += chunk.json.length;
             successCount++;
 
-            // For split-files mode: download each chunk immediately
             if (useSplitFiles) {
                 await downloadChunk(chunk.json, chunk.filename);
                 updateFileStatus(filename, 'done');
-
-                // Update item ID if filename changed
                 const item = document.getElementById(`file-${filename}`);
                 if (item && chunk.filename !== filename) {
                     item.id = `file-${chunk.filename}`;
@@ -361,7 +495,6 @@ async function processChunks(meta: { totalCount: number; totalChunks: number; ba
                     }
                 }
             } else {
-                // Single-file mode: just show progress
                 updateFileStatus(filename, 'done');
             }
 
@@ -374,16 +507,13 @@ async function processChunks(meta: { totalCount: number; totalChunks: number; ba
         }
     }
 
-    // For single-file mode: merge all chunks and download as one file
     if (!useSplitFiles) {
         const mergedEntries: any[] = [];
         for (const c of allChunks) {
             try {
                 const parsed = JSON.parse(c.json);
                 mergedEntries.push(...parsed.log.entries);
-            } catch {
-                // Skip malformed chunks
-            }
+            } catch { /* skip */ }
         }
         const mergedJson = JSON.stringify({
             log: {
@@ -394,19 +524,16 @@ async function processChunks(meta: { totalCount: number; totalChunks: number; ba
             },
         }, null, 2);
 
-        const mergedFilename = baseFilename;
-        // Update all file items to show merging
         for (let i = 1; i <= allChunks.length; i++) {
             const fname = baseFilename.replace('.har', allChunks.length > 1 ? `-${String(i).padStart(3, '0')}.har` : '.har');
             updateFileStatus(fname, 'downloading');
         }
 
-        await downloadChunk(mergedJson, mergedFilename);
+        await downloadChunk(mergedJson, baseFilename);
         progressText.textContent = `Merged ${mergedEntries.length} entries into 1 file`;
         progressFill.style.width = '100%';
         totalBytes = mergedJson.length;
 
-        // Update all file items to done
         for (let i = 1; i <= allChunks.length; i++) {
             const fname = baseFilename.replace('.har', allChunks.length > 1 ? `-${String(i).padStart(3, '0')}.har` : '.har');
             updateFileStatus(fname, 'done');
@@ -415,6 +542,19 @@ async function processChunks(meta: { totalCount: number; totalChunks: number; ba
 
     statsEl.textContent = `${successCount} part${successCount > 1 ? 's' : ''} · ${formatBytes(totalBytes)} total`;
     setSuccess();
+}
+
+async function processChunks(meta: { totalCount: number; totalChunks: number; baseFilename: string }) {
+    try {
+        await processChunksDirect(meta);
+    } catch (e) {
+        console.warn('Direct IDB download failed, falling back to messages:', e);
+        try {
+            await processChunksFallback(meta);
+        } catch (e2) {
+            setError(`Download failed: ${e2 instanceof Error ? e2.message : String(e2)}`);
+        }
+    }
 }
 
 // --- Init manager ---
@@ -429,29 +569,68 @@ async function initManager() {
     const { splitFiles } = await chrome.storage.local.get('splitFiles');
     splitFilesInput.checked = !!splitFiles;
 
-    const { requestCount } = await chrome.storage.local.get('requestCount');
-    const count = requestCount || 0;
-    requestCountEl.textContent = count.toString();
-    if (count > 0) {
-        loadRequestList();
+    // Get count from direct IDB or storage
+    try {
+        const { countRequests } = await import('./har-builder-direct.js');
+        const count = await countRequests();
+        requestCountEl.textContent = count.toString();
+        await chrome.storage.local.set({ requestCount: count });
+        if (count > 0) {
+            loadRequestList();
+        }
+    } catch {
+        const { requestCount } = await chrome.storage.local.get('requestCount');
+        const count = requestCount || 0;
+        requestCountEl.textContent = count.toString();
+        if (count > 0) {
+            loadRequestList();
+        }
     }
 
     saveHarButton.addEventListener('click', async () => {
         useSplitFiles = splitFilesInput.checked;
-        const count = await chrome.runtime.sendMessage({
-            type: 'FALLBACK_INIT_DOWNLOAD',
-            splitFiles: useSplitFiles,
-        });
-        if (!count || count.error) {
-            setError(msg('fallbackNoData') || 'No requests captured.');
-            return;
+
+        // Get init info from direct IDB or fallback message
+        let initInfo: { totalCount: number; totalChunks: number; baseFilename: string } | null = null;
+        try {
+            const { countRequests, estimateTotalChunks } = await import('./har-builder-direct.js');
+            const total = await countRequests();
+            if (total === 0) {
+                setError(msg('fallbackNoData') || 'No requests captured.');
+                return;
+            }
+            let chunks = 1;
+            if (useSplitFiles) {
+                chunks = await estimateTotalChunks();
+            }
+            initInfo = {
+                totalCount: total,
+                totalChunks: chunks,
+                baseFilename: `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`,
+            };
+        } catch {
+            initInfo = await chrome.runtime.sendMessage({
+                type: 'FALLBACK_INIT_DOWNLOAD',
+                splitFiles: useSplitFiles,
+            });
+            if (!initInfo || !(initInfo as any).totalCount) {
+                setError(msg('fallbackNoData') || 'No requests captured.');
+                return;
+            }
         }
+
         showDownloadMode();
-        await processChunks(count);
+        await processChunks(initInfo);
     });
 
-    clearDataButton.addEventListener('click', () => {
-        chrome.runtime.sendMessage({ type: 'CLEAR_DATA' });
+    clearDataButton.addEventListener('click', async () => {
+        try {
+            const { clearAllDataDirect } = await import('./har-builder-direct.js');
+            await clearAllDataDirect();
+        } catch {
+            chrome.runtime.sendMessage({ type: 'CLEAR_DATA' });
+        }
+        await chrome.storage.local.set({ requestCount: 0 });
         requestCountEl.textContent = '0';
         requestListEl.innerHTML = '';
         paginationEl.style.display = 'none';
