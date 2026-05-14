@@ -1,7 +1,9 @@
 /* src/background/index.ts */
-import { countRequests, iterateRequestsBatched } from '../lib/idb-cursor.js';
-import { CHUNK_SIZE_ENTRIES, generateChunkFilename } from '../lib/streaming-har.js';
-import { buildHarEntry, buildHarLog } from '../lib/har-builder.js';
+import { countRequests, iterateRequestsBatched, assembleBodies, getAllLegacyRequests } from '../lib/idb-cursor.js';
+import { CHUNK_SIZE_ENTRIES, generateChunkFilename, MAX_CHUNK_BYTES } from '../lib/streaming-har.js';
+import { buildHarEntry, buildHarLog, estimateEntrySize } from '../lib/har-builder.js';
+import { openDB } from '../lib/idb.js';
+import { STORE_META, STORE_BODIES } from '../lib/idb-schema.js';
 
 console.log("Background service worker started.");
 
@@ -23,65 +25,170 @@ async function initialize() {
 
 initialize();
 
-// --- IndexedDB ---
-const DB_NAME = 'HarCollectorDB';
-const STORE_NAME = 'requests';
-
-function openDB(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-        const request = indexedDB.open(DB_NAME, 1);
-        request.onupgradeneeded = () => {
-            const db = request.result;
-            if (!db.objectStoreNames.contains(STORE_NAME)) {
-                db.createObjectStore(STORE_NAME, { keyPath: ['tabId', 'requestId'] });
-            }
-        };
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-    });
-}
-
+// --- IndexedDB: saveRequest (split meta + bodies) ---
 async function saveRequest(tabId: number, requestId: string, data: any) {
     try {
         const db = await openDB();
-        const tx = db.transaction(STORE_NAME, 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
+        const tx = db.transaction([STORE_META, STORE_BODIES], 'readwrite');
+        const metaStore = tx.objectStore(STORE_META);
+        const bodiesStore = tx.objectStore(STORE_BODIES);
+
+        // Read existing meta
         const existing = await new Promise<any>((resolve, reject) => {
-            const req = store.get([tabId, requestId]);
+            const req = metaStore.get([tabId, requestId]);
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
         });
 
-        const newData = existing ? { ...existing, ...data } : { tabId, requestId, ...data };
-        store.put(newData);
-        await new Promise((resolve) => { tx.oncomplete = resolve; });
+        const merged = existing ? { ...existing, ...data } : { tabId, requestId, ...data };
+
+        // Detect if body data arrived in this write
+        const hasResponseBody = 'responseBody' in merged;
+        const hasPostData = merged.request?.postData !== undefined;
+
+        if (hasResponseBody || hasPostData) {
+            const responseBody = merged.responseBody;
+            const base64Encoded = merged.base64Encoded;
+            const postData = merged.request?.postData;
+
+            // Remove body fields from meta
+            delete merged.responseBody;
+            delete merged.base64Encoded;
+
+            // Build or update bodyInfo
+            const bodyInfo = merged.bodyInfo || {
+                hasResponse: false,
+                responseTotalSize: 0,
+                responseChunks: 0,
+                responseBase64Encoded: false,
+                hasPostData: false,
+                postDataTotalSize: 0,
+                postDataChunks: 0,
+            };
+
+            // Handle responseBody
+            if (typeof responseBody === 'string') {
+                const bodySize = new TextEncoder().encode(responseBody).length;
+                const encoder = new TextEncoder();
+                const bytes = encoder.encode(responseBody);
+
+                if (bytes.length <= MAX_CHUNK_BYTES) {
+                    // Single chunk
+                    bodiesStore.put({
+                        tabId, requestId,
+                        bodyType: 'response',
+                        chunkIndex: 0,
+                        offset: 0,
+                        data: responseBody,
+                        totalSize: bodySize,
+                        isBase64Encoded: !!base64Encoded,
+                    });
+                    bodyInfo.hasResponse = true;
+                    bodyInfo.responseTotalSize = bodySize;
+                    bodyInfo.responseChunks = 1;
+                } else {
+                    // Split into 35MB chunks
+                    const decoder = new TextDecoder('utf-8', { fatal: false });
+                    let offset = 0;
+                    let chunkIndex = 1;
+                    let chunkCount = 0;
+
+                    while (offset < bytes.length) {
+                        let end = Math.min(offset + MAX_CHUNK_BYTES, bytes.length);
+                        while (end > offset && (bytes[end] & 0xc0) === 0x80) end--;
+                        if (end === offset) end = Math.min(offset + 1, bytes.length);
+
+                        bodiesStore.put({
+                            tabId, requestId,
+                            bodyType: 'response',
+                            chunkIndex,
+                            offset,
+                            data: decoder.decode(bytes.slice(offset, end)),
+                            totalSize: bodySize,
+                            isBase64Encoded: !!base64Encoded,
+                        });
+
+                        offset = end;
+                        chunkIndex++;
+                        chunkCount++;
+                    }
+
+                    bodyInfo.hasResponse = true;
+                    bodyInfo.responseTotalSize = bodySize;
+                    bodyInfo.responseChunks = chunkCount;
+                }
+
+                bodyInfo.responseBase64Encoded = !!base64Encoded;
+            }
+
+            // Handle postData (request body)
+            if (typeof postData === 'string') {
+                const postDataSize = new TextEncoder().encode(postData).length;
+                if (postDataSize <= MAX_CHUNK_BYTES) {
+                    // Keep inline in meta
+                    merged.request.postData = postData;
+                    bodyInfo.hasPostData = true;
+                    bodyInfo.postDataTotalSize = postDataSize;
+                    bodyInfo.postDataChunks = 0;
+                } else {
+                    // Split into chunks
+                    const encoder = new TextEncoder();
+                    const bytes = encoder.encode(postData);
+                    const decoder = new TextDecoder('utf-8', { fatal: false });
+                    let offset = 0;
+                    let chunkIndex = 1;
+                    let chunkCount = 0;
+
+                    while (offset < bytes.length) {
+                        let end = Math.min(offset + MAX_CHUNK_BYTES, bytes.length);
+                        while (end > offset && (bytes[end] & 0xc0) === 0x80) end--;
+                        if (end === offset) end = Math.min(offset + 1, bytes.length);
+
+                        bodiesStore.put({
+                            tabId, requestId,
+                            bodyType: 'request',
+                            chunkIndex,
+                            offset,
+                            data: decoder.decode(bytes.slice(offset, end)),
+                            totalSize: postDataSize,
+                            isBase64Encoded: false,
+                        });
+
+                        offset = end;
+                        chunkIndex++;
+                        chunkCount++;
+                    }
+
+                    bodyInfo.hasPostData = true;
+                    bodyInfo.postDataTotalSize = postDataSize;
+                    bodyInfo.postDataChunks = chunkCount;
+                    delete merged.request.postData;
+                }
+            }
+
+            merged.bodyInfo = bodyInfo;
+        }
+
+        // Write meta
+        metaStore.put(merged);
+
+        await new Promise((resolve, reject) => {
+            tx.oncomplete = () => resolve(null);
+            tx.onerror = () => reject(tx.error);
+        });
         db.close();
     } catch (e) {
         console.error("IndexedDB saveRequest failed:", e);
     }
 }
 
-async function getAllRequests(): Promise<any[]> {
-    const db = await openDB();
-    try {
-        const tx = db.transaction(STORE_NAME, 'readonly');
-        const store = tx.objectStore(STORE_NAME);
-        const result = await new Promise<any[]>((resolve, reject) => {
-            const req = store.getAll();
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = () => reject(req.error);
-        });
-        return result;
-    } finally {
-        db.close();
-    }
-}
-
+// --- Clear all data ---
 async function clearAllData() {
     try {
         const db = await openDB();
-        const tx = db.transaction(STORE_NAME, 'readwrite');
-        tx.objectStore(STORE_NAME).clear();
+        const tx = db.transaction([STORE_META, STORE_BODIES], 'readwrite');
+        tx.objectStore(STORE_META).clear();
+        tx.objectStore(STORE_BODIES).clear();
         await new Promise((resolve) => { tx.oncomplete = resolve; });
         db.close();
         await chrome.storage.local.set({ requestCount: 0 });
@@ -125,7 +232,6 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
         });
         return true;
     } else if (message.type === 'FALLBACK_REQUEST_DATA') {
-        // Legacy path: build full HAR from all data (kept for backward compat with small datasets)
         handleFallbackRequestData().then(data => {
             _sendResponse(data);
         }).catch(e => {
@@ -279,12 +385,30 @@ function notifyPopup(level: 'error' | 'success' | 'info', message: string) {
 // --- Legacy fallback data handler (small datasets) ---
 async function handleFallbackRequestData(): Promise<{ entries: any[]; harLog: any; count: number } | { error: string }> {
     try {
-        const allRequests = await getAllRequests();
+        const allRequests = await getAllLegacyRequests();
         if (allRequests.length === 0) {
             return { error: "No requests captured" };
         }
 
+        // Enrich with bodies from request_bodies store
+        for (const req of allRequests) {
+            const { responseBody, base64Encoded, postData } = await assembleBodies(req.tabId, req.requestId);
+            if (responseBody !== undefined) {
+                req.responseBody = responseBody;
+                req.base64Encoded = base64Encoded;
+            }
+            if (postData !== undefined) {
+                req.request.postData = postData;
+            }
+        }
+
         const harLog = buildHarLog(allRequests);
+
+        // Check total size
+        const jsonSize = new TextEncoder().encode(JSON.stringify(harLog)).length;
+        if (jsonSize > 64 * 1024 * 1024) {
+            return { error: "HAR data too large for single download. Please use the chunked download option instead." };
+        }
 
         return { entries: harLog.log.entries, harLog, count: allRequests.length };
     } catch (e) {
@@ -314,9 +438,27 @@ async function handleFallbackInitDownload(splitFiles: boolean = true): Promise<{
             return { error: "No requests captured" };
         }
 
-        const totalChunks = splitFiles
-            ? Math.max(1, Math.ceil(totalCount / CHUNK_SIZE_ENTRIES))
-            : 1;
+        // Reset cursor position for new download session
+        await chrome.storage.local.set({ fallbackChunkCursor: null });
+
+        let totalChunks: number;
+        if (splitFiles) {
+            // Estimate total bytes by scanning bodyInfo from metadata
+            let estimatedBytes = 0;
+            for await (const batch of iterateRequestsBatched({ batchSize: 100 })) {
+                for (const meta of batch) {
+                    if (!meta.response || !meta.request || !meta.request.method) continue;
+                    const bodyInfo = meta.bodyInfo;
+                    if (bodyInfo?.hasResponse) estimatedBytes += bodyInfo.responseTotalSize;
+                    if (bodyInfo?.hasPostData) estimatedBytes += bodyInfo.postDataTotalSize;
+                    estimatedBytes += 5 * 1024; // HAR overhead per entry
+                }
+            }
+            totalChunks = Math.max(1, Math.ceil(estimatedBytes / MAX_OUTPUT_BYTES));
+        } else {
+            totalChunks = 1;
+        }
+
         const baseFilename = `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`;
 
         return { totalCount, totalChunks, baseFilename };
@@ -326,22 +468,103 @@ async function handleFallbackInitDownload(splitFiles: boolean = true): Promise<{
 }
 
 // --- Chunk protocol: request a specific chunk ---
-async function handleFallbackRequestChunk(chunkIndex: number, splitFiles: boolean = true): Promise<{ chunkIndex: number; total: number; json: string; filename: string; entryCount: number } | { error: string }> {
+const MAX_OUTPUT_BYTES = 25 * 1024 * 1024; // 25MB, well under 64MB even with formatting overhead
+
+async function estimateTotalChunks(): Promise<number> {
     try {
-        const batchIterator = iterateRequestsBatched({ batchSize: 100 });
+        let estimatedBytes = 0;
+        let entryCount = 0;
+        for await (const batch of iterateRequestsBatched({ batchSize: 100 })) {
+            for (const meta of batch) {
+                if (!meta.response || !meta.request || !meta.request.method) continue;
+                entryCount++;
+                const bodyInfo = meta.bodyInfo;
+                if (bodyInfo?.hasResponse) {
+                    estimatedBytes += bodyInfo.responseTotalSize;
+                }
+                if (bodyInfo?.hasPostData) {
+                    estimatedBytes += bodyInfo.postDataTotalSize;
+                }
+                estimatedBytes += 5 * 1024; // HAR overhead per entry
+            }
+        }
+        // If no bodyInfo available (old data), use 100KB default per entry
+        if (estimatedBytes === 0 && entryCount > 0) {
+            estimatedBytes = entryCount * 100 * 1024;
+        }
+        if (estimatedBytes === 0) return 1;
+        return Math.max(1, Math.ceil(estimatedBytes / MAX_OUTPUT_BYTES));
+    } catch {
+        return 1;
+    }
+}
+
+async function handleFallbackRequestChunk(chunkIndex: number, splitFiles: boolean = true): Promise<{
+    chunkIndex: number; total: number; json: string; filename: string; entryCount: number; hasMore: boolean
+} | { error: string }> {
+    try {
+        // Read cursor position
+        const { fallbackChunkCursor } = await chrome.storage.local.get('fallbackChunkCursor');
+        const resumeKey = fallbackChunkCursor as [number, string] | undefined;
+
+        const batchIterator = iterateRequestsBatched({
+            batchSize: 100,
+            resumeAfterKey: resumeKey,
+        });
+
         let targetEntries: any[] = [];
         let collected = 0;
-        // When splitFiles is false, collect ALL entries (no limit)
-        const targetCount = splitFiles ? CHUNK_SIZE_ENTRIES : Infinity;
+        let accumulatedBytes = 0;
+        let hasMore = false;
+        let lastKey: [number, string] | null = null;
+
+        const totalChunks = splitFiles ? await estimateTotalChunks() : 1;
 
         for await (const batch of batchIterator) {
-            for (const req of batch) {
-                if (!req.response || !req.request || !req.request.method) continue;
-                targetEntries.push(req);
+            for (const meta of batch) {
+                if (!meta.response || !meta.request || !meta.request.method) continue;
+
+                lastKey = [meta.tabId, meta.requestId];
+
+                // Assemble bodies on-demand
+                const { responseBody, base64Encoded, postData } = await assembleBodies(meta.tabId, meta.requestId);
+
+                const enriched: any = { ...meta };
+                if (responseBody !== undefined) {
+                    enriched.responseBody = responseBody;
+                    enriched.base64Encoded = base64Encoded;
+                }
+                if (postData !== undefined) {
+                    enriched.request = { ...enriched.request, postData };
+                }
+
+                const entry = buildHarEntry(enriched);
+                const entryBytes = estimateEntrySize(entry);
+
+                // Stop at byte limit (both modes) to avoid 64MB message crash
+                if (accumulatedBytes + entryBytes > MAX_OUTPUT_BYTES && collected > 0) {
+                    hasMore = true;
+                    break;
+                }
+                // Split-files mode: also stop at count limit
+                if (splitFiles && collected >= CHUNK_SIZE_ENTRIES) {
+                    hasMore = true;
+                    break;
+                }
+
+                targetEntries.push(enriched);
+                accumulatedBytes += entryBytes;
                 collected++;
-                if (collected >= targetCount) break;
             }
-            if (collected >= targetCount) break;
+            if (hasMore) break;
+        }
+
+        // Save cursor position if we processed any entries
+        if (lastKey && !hasMore) {
+            // All done, clear cursor
+            await chrome.storage.local.set({ fallbackChunkCursor: null });
+        } else if (lastKey && hasMore) {
+            await chrome.storage.local.set({ fallbackChunkCursor: lastKey });
         }
 
         if (targetEntries.length === 0) {
@@ -359,15 +582,10 @@ async function handleFallbackRequestChunk(chunkIndex: number, splitFiles: boolea
             },
         }, null, 2);
 
-        // Calculate total chunks for filename
-        const totalCount = await countRequests();
-        const totalChunks = splitFiles
-            ? Math.max(1, Math.ceil(totalCount / CHUNK_SIZE_ENTRIES))
-            : 1;
         const baseFilename = `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`;
         const filename = generateChunkFilename(baseFilename, chunkIndex, totalChunks);
 
-        return { chunkIndex, total: totalChunks, json, filename, entryCount: entries.length };
+        return { chunkIndex, total: totalChunks, json, filename, entryCount: entries.length, hasMore };
     } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) };
     }

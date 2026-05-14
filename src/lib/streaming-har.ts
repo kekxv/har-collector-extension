@@ -4,6 +4,7 @@
 import { buildHarEntry, type HarEntry } from './har-builder.js';
 
 export const CHUNK_SIZE_ENTRIES = 500;
+export const MAX_CHUNK_BYTES = 40 * 1024 * 1024; // 40MB safety margin under 64MB limit
 const VERSION = "1.0.5";
 
 export interface HarChunk {

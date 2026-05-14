@@ -139,6 +139,13 @@ export function buildHarEntry(req: NetworkRequest): HarEntry {
 }
 
 /**
+ * Estimates the byte size of a HAR entry when serialized to JSON.
+ */
+export function estimateEntrySize(entry: HarEntry): number {
+    return new TextEncoder().encode(JSON.stringify(entry)).length;
+}
+
+/**
  * Builds a complete HAR log from an array of network request records.
  * Only includes requests that have a response.
  */

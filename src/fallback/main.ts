@@ -289,7 +289,9 @@ async function processChunks(meta: { totalCount: number; totalChunks: number; ba
     statsEl.textContent = '';
     messageEl.textContent = '';
     closePageBtn.style.display = 'none';
+    backToListBtn.style.display = 'none';
 
+    // Pre-create initial file items
     for (let i = 1; i <= totalChunks; i++) {
         const filename = baseFilename.replace('.har', totalChunks > 1 ? `-${String(i).padStart(3, '0')}.har` : '.har');
         addFileItem(filename, i === 1 ? 'preparing' : 'pending');
@@ -297,55 +299,121 @@ async function processChunks(meta: { totalCount: number; totalChunks: number; ba
 
     let totalBytes = 0;
     let successCount = 0;
+    let hasMore = true;
+    let chunkNum = 1;
 
-    for (let i = 1; i <= totalChunks; i++) {
-        const filename = baseFilename.replace('.har', totalChunks > 1 ? `-${String(i).padStart(3, '0')}.har` : '.har');
+    // For single-file mode: collect all chunks, merge at the end
+    const allChunks: { json: string; entryCount: number }[] = [];
+
+    while (hasMore) {
+        // Dynamic total for display
+        const displayTotal = Math.max(totalChunks, chunkNum);
+
+        // Add new file item if beyond initial estimate
+        if (chunkNum > totalChunks) {
+            const filename = baseFilename.replace('.har', displayTotal > 1 ? `-${String(chunkNum).padStart(3, '0')}.har` : '.har');
+            addFileItem(filename, 'preparing');
+        }
+
+        const filename = baseFilename.replace('.har', displayTotal > 1 ? `-${String(chunkNum).padStart(3, '0')}.har` : '.har');
         updateFileStatus(filename, 'downloading');
-        setProgress(i, totalChunks);
-        progressText.textContent = `Requesting file ${i} of ${totalChunks}...`;
+        setProgress(chunkNum, displayTotal);
+        progressText.textContent = `Requesting file ${chunkNum} of ${displayTotal}...`;
 
         try {
             const chunk = await chrome.runtime.sendMessage({
                 type: 'FALLBACK_REQUEST_CHUNK',
-                chunkIndex: i,
+                chunkIndex: chunkNum,
                 splitFiles: useSplitFiles,
             });
 
             if (!chunk || chunk.error) {
                 updateFileStatus(filename, 'error');
-                setError(`Chunk ${i} failed: ${chunk?.error || 'Unknown'}`);
+                setError(`Chunk ${chunkNum} failed: ${chunk?.error || 'Unknown'}`);
                 return;
             }
 
-            await downloadChunk(chunk.json, chunk.filename);
-            updateFileStatus(filename, 'done');
+            // Update total chunks from backend (may differ from initial estimate)
+            if (chunk.total > totalChunks) {
+                totalChunks = chunk.total;
+                progressSubtitleEl.textContent = `${totalCount} entries · ${totalChunks} file${totalChunks > 1 ? 's' : ''}`;
+            }
+
+            allChunks.push({ json: chunk.json, entryCount: chunk.entryCount });
             totalBytes += chunk.json.length;
             successCount++;
 
-            const item = document.getElementById(`file-${filename}`);
-            if (item && chunk.filename !== filename) {
-                item.id = `file-${chunk.filename}`;
-                const statusId = `file-status-${filename}`;
-                const statusEl = document.getElementById(statusId);
-                if (statusEl) {
-                    statusEl.id = `file-status-${chunk.filename}`;
-                    const nameSpan = item.querySelector('span');
-                    if (nameSpan) nameSpan.textContent = chunk.filename;
+            // For split-files mode: download each chunk immediately
+            if (useSplitFiles) {
+                await downloadChunk(chunk.json, chunk.filename);
+                updateFileStatus(filename, 'done');
+
+                // Update item ID if filename changed
+                const item = document.getElementById(`file-${filename}`);
+                if (item && chunk.filename !== filename) {
+                    item.id = `file-${chunk.filename}`;
+                    const statusId = `file-status-${filename}`;
+                    const statusEl = document.getElementById(statusId);
+                    if (statusEl) {
+                        statusEl.id = `file-status-${chunk.filename}`;
+                        const nameSpan = item.querySelector('span');
+                        if (nameSpan) nameSpan.textContent = chunk.filename;
+                    }
                 }
+            } else {
+                // Single-file mode: just show progress
+                updateFileStatus(filename, 'done');
             }
+
+            hasMore = chunk.hasMore === true;
+            chunkNum++;
         } catch (e) {
             updateFileStatus(filename, 'error');
-            setError(`Download failed for file ${i}: ${e instanceof Error ? e.message : String(e)}`);
+            setError(`Download failed for file ${chunkNum}: ${e instanceof Error ? e.message : String(e)}`);
             return;
-        }
-
-        for (let j = i + 1; j <= totalChunks; j++) {
-            const nextFilename = baseFilename.replace('.har', totalChunks > 1 ? `-${String(j).padStart(3, '0')}.har` : '.har');
-            updateFileStatus(nextFilename, j === i + 1 ? 'preparing' : 'pending');
         }
     }
 
-    statsEl.textContent = `${successCount} files · ${formatBytes(totalBytes)} total`;
+    // For single-file mode: merge all chunks and download as one file
+    if (!useSplitFiles) {
+        const mergedEntries: any[] = [];
+        for (const c of allChunks) {
+            try {
+                const parsed = JSON.parse(c.json);
+                mergedEntries.push(...parsed.log.entries);
+            } catch {
+                // Skip malformed chunks
+            }
+        }
+        const mergedJson = JSON.stringify({
+            log: {
+                version: "1.2",
+                creator: { name: "HarCollector Extension", version: "1.0.5" },
+                pages: [],
+                entries: mergedEntries,
+            },
+        }, null, 2);
+
+        const mergedFilename = baseFilename;
+        // Update all file items to show merging
+        for (let i = 1; i <= allChunks.length; i++) {
+            const fname = baseFilename.replace('.har', allChunks.length > 1 ? `-${String(i).padStart(3, '0')}.har` : '.har');
+            updateFileStatus(fname, 'downloading');
+        }
+
+        await downloadChunk(mergedJson, mergedFilename);
+        progressText.textContent = `Merged ${mergedEntries.length} entries into 1 file`;
+        progressFill.style.width = '100%';
+        totalBytes = mergedJson.length;
+
+        // Update all file items to done
+        for (let i = 1; i <= allChunks.length; i++) {
+            const fname = baseFilename.replace('.har', allChunks.length > 1 ? `-${String(i).padStart(3, '0')}.har` : '.har');
+            updateFileStatus(fname, 'done');
+        }
+    }
+
+    statsEl.textContent = `${successCount} part${successCount > 1 ? 's' : ''} · ${formatBytes(totalBytes)} total`;
     setSuccess();
 }
 
