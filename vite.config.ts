@@ -1,8 +1,37 @@
 import { defineConfig } from 'vite'
 import { crx } from '@crxjs/vite-plugin'
-import manifest from './src/manifest.json'
 import { resolve } from 'path'
-import { copyFileSync, statSync, readdirSync, mkdirSync, existsSync } from 'fs'
+import { copyFileSync, statSync, readdirSync, mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs'
+import pkg from './package.json'
+
+// Build manifest with version from package.json and resolved locale messages
+function buildManifest() {
+  const raw = JSON.parse(readFileSync(resolve(__dirname, 'src/manifest.json'), 'utf-8'))
+  const localeEn = JSON.parse(readFileSync(resolve(__dirname, 'src/_locales/en/messages.json'), 'utf-8'))
+
+  // Replace __MSG_key__ with actual values from default locale
+  function resolveMsgs(value: string): string {
+    const match = value.match(/^__MSG_(\w+)__$/)
+    if (match) {
+      const key = match[1]
+      if (localeEn[key]) return localeEn[key].message
+    }
+    return value
+  }
+
+  return {
+    ...raw,
+    version: pkg.version,
+    name: resolveMsgs(raw.name),
+    description: resolveMsgs(raw.description),
+    action: {
+      ...raw.action,
+      default_title: resolveMsgs(raw.action.default_title),
+    },
+  }
+}
+
+const manifest = buildManifest()
 
 function copyLocalesPlugin() {
   return {
