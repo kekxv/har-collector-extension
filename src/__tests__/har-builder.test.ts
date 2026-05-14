@@ -6,6 +6,7 @@ import {
     buildHarEntry,
     buildHarLog,
     generateHarFilename,
+    estimateEntrySize,
     type NetworkRequest,
 } from '../lib/har-builder';
 
@@ -278,5 +279,66 @@ describe('generateHarFilename', () => {
         const filename = generateHarFilename();
         expect(filename.startsWith('har-capture-')).toBe(true);
         expect(filename.endsWith('.har')).toBe(true);
+    });
+});
+
+// --- estimateEntrySize ---
+describe('estimateEntrySize', () => {
+    function makeEntry(overrides: Record<string, unknown> = {}): any {
+        return {
+            startedDateTime: '2024-01-01T00:00:00.000Z',
+            time: 50000,
+            request: {
+                method: 'GET',
+                url: 'https://example.com',
+                httpVersion: 'HTTP/2.0',
+                cookies: [],
+                headers: [],
+                queryString: [],
+                headersSize: -1,
+                bodySize: 0,
+            },
+            response: {
+                status: 200,
+                statusText: 'OK',
+                httpVersion: 'HTTP/2.0',
+                cookies: [],
+                headers: [],
+                content: { size: 0, mimeType: 'text/html', text: '', encoding: undefined },
+                redirectURL: '',
+                headersSize: -1,
+                bodySize: 0,
+            },
+            cache: {},
+            timings: { send: -1, wait: -1, receive: -1, ssl: -1, connect: -1, dns: -1, blocked: -1 },
+            ...overrides,
+        };
+    }
+
+    it('returns a positive byte count for any entry', () => {
+        const entry = makeEntry();
+        const size = estimateEntrySize(entry);
+        expect(size).toBeGreaterThan(0);
+    });
+
+    it('increases with larger response body', () => {
+        const small = makeEntry({ response: { status: 200, statusText: 'OK', httpVersion: 'HTTP/2.0', cookies: [], headers: [], content: { size: 5, mimeType: 'text/plain', text: 'hello', encoding: undefined }, redirectURL: '', headersSize: -1, bodySize: 0 } });
+        const large = makeEntry({ response: { status: 200, statusText: 'OK', httpVersion: 'HTTP/2.0', cookies: [], headers: [], content: { size: 50, mimeType: 'text/plain', text: 'hello'.repeat(10), encoding: undefined }, redirectURL: '', headersSize: -1, bodySize: 0 } });
+        expect(estimateEntrySize(large)).toBeGreaterThan(estimateEntrySize(small));
+    });
+
+    it('matches TextEncoder output of JSON.stringify', () => {
+        const entry = makeEntry();
+        const json = JSON.stringify(entry);
+        const expected = new TextEncoder().encode(json).length;
+        expect(estimateEntrySize(entry)).toBe(expected);
+    });
+
+    it('accounts for pretty-print overhead', () => {
+        const entry = makeEntry();
+        const compact = new TextEncoder().encode(JSON.stringify(entry)).length;
+        const pretty = new TextEncoder().encode(JSON.stringify(entry, null, 2)).length;
+        expect(estimateEntrySize(entry)).toBe(compact);
+        expect(pretty).toBeGreaterThan(compact);
     });
 });
