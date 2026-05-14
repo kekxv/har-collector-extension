@@ -638,6 +638,12 @@ async function initManager() {
         totalRecords = 0;
     });
 
+    closePageBtn.addEventListener('click', () => {
+        chrome.tabs.getCurrent((tab) => {
+            if (tab?.id) chrome.tabs.remove(tab.id);
+        });
+    });
+
     backToListBtn.addEventListener('click', () => {
         showManagerMode();
         loadRequestList();
