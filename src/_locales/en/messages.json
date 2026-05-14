@@ -154,5 +154,21 @@
   "loadMore": {
     "message": "Load more",
     "description": "Load more requests button text"
+  },
+  "closePage": {
+    "message": "Close Page",
+    "description": "Close download page button"
+  },
+  "backToList": {
+    "message": "Back to List",
+    "description": "Return to request list after download"
+  },
+  "prevPage": {
+    "message": "Prev",
+    "description": "Previous page button"
+  },
+  "nextPage": {
+    "message": "Next",
+    "description": "Next page button"
   }
 }

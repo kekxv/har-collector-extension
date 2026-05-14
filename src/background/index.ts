@@ -109,7 +109,7 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
             notifyPopup('error', `Failed to save HAR: ${e instanceof Error ? e.message : String(e)}`);
         });
     } else if (message.type === 'FALLBACK_INIT_DOWNLOAD') {
-        handleFallbackInitDownload().then(data => {
+        handleFallbackInitDownload(message.splitFiles).then(data => {
             _sendResponse(data);
         }).catch(e => {
             console.error("FALLBACK_INIT_DOWNLOAD failed:", e);
@@ -117,7 +117,7 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
         });
         return true;
     } else if (message.type === 'FALLBACK_REQUEST_CHUNK') {
-        handleFallbackRequestChunk(message.chunkIndex).then(data => {
+        handleFallbackRequestChunk(message.chunkIndex, message.splitFiles).then(data => {
             _sendResponse(data);
         }).catch(e => {
             console.error("FALLBACK_REQUEST_CHUNK failed:", e);
@@ -307,14 +307,16 @@ async function saveHar() {
 }
 
 // --- Chunk protocol: init download ---
-async function handleFallbackInitDownload(): Promise<{ totalCount: number; totalChunks: number; baseFilename: string } | { error: string }> {
+async function handleFallbackInitDownload(splitFiles: boolean = true): Promise<{ totalCount: number; totalChunks: number; baseFilename: string } | { error: string }> {
     try {
         const totalCount = await countRequests();
         if (totalCount === 0) {
             return { error: "No requests captured" };
         }
 
-        const totalChunks = Math.max(1, Math.ceil(totalCount / CHUNK_SIZE_ENTRIES));
+        const totalChunks = splitFiles
+            ? Math.max(1, Math.ceil(totalCount / CHUNK_SIZE_ENTRIES))
+            : 1;
         const baseFilename = `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`;
 
         return { totalCount, totalChunks, baseFilename };
@@ -324,12 +326,13 @@ async function handleFallbackInitDownload(): Promise<{ totalCount: number; total
 }
 
 // --- Chunk protocol: request a specific chunk ---
-async function handleFallbackRequestChunk(chunkIndex: number): Promise<{ chunkIndex: number; total: number; json: string; filename: string; entryCount: number } | { error: string }> {
+async function handleFallbackRequestChunk(chunkIndex: number, splitFiles: boolean = true): Promise<{ chunkIndex: number; total: number; json: string; filename: string; entryCount: number } | { error: string }> {
     try {
         const batchIterator = iterateRequestsBatched({ batchSize: 100 });
         let targetEntries: any[] = [];
         let collected = 0;
-        const targetCount = CHUNK_SIZE_ENTRIES;
+        // When splitFiles is false, collect ALL entries (no limit)
+        const targetCount = splitFiles ? CHUNK_SIZE_ENTRIES : Infinity;
 
         for await (const batch of batchIterator) {
             for (const req of batch) {
@@ -358,7 +361,9 @@ async function handleFallbackRequestChunk(chunkIndex: number): Promise<{ chunkIn
 
         // Calculate total chunks for filename
         const totalCount = await countRequests();
-        const totalChunks = Math.max(1, Math.ceil(totalCount / CHUNK_SIZE_ENTRIES));
+        const totalChunks = splitFiles
+            ? Math.max(1, Math.ceil(totalCount / CHUNK_SIZE_ENTRIES))
+            : 1;
         const baseFilename = `har-capture-${new Date().toISOString().replace(/:/g, '-').replace(/\./g, '_')}.har`;
         const filename = generateChunkFilename(baseFilename, chunkIndex, totalChunks);
 

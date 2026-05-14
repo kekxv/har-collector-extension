@@ -4,8 +4,7 @@
 const capturedLabel = document.getElementById('captured-label')!;
 const requestCountEl = document.getElementById('request-count')!;
 const requestListEl = document.getElementById('request-list')!;
-const loadMoreContainer = document.getElementById('load-more')!;
-const loadMoreBtn = document.getElementById('load-more-btn') as HTMLButtonElement;
+const paginationEl = document.getElementById('pagination')!;
 const splitFilesInput = document.getElementById('split-files-input') as HTMLInputElement;
 const splitLabel = document.getElementById('split-label')!;
 const saveHarButton = document.getElementById('save-har-button') as HTMLButtonElement;
@@ -13,32 +12,36 @@ const clearDataButton = document.getElementById('clear-data-button') as HTMLButt
 
 // --- Download section ---
 const titleEl = document.getElementById('title')!;
-const subtitleEl = document.getElementById('subtitle')!;
 const spinnerEl = document.getElementById('spinner')!;
+const progressSubtitleEl = document.getElementById('progress-subtitle')!;
 const messageEl = document.getElementById('message')!;
 const progressBar = document.getElementById('progress-bar')!;
 const progressFill = document.getElementById('progress-fill')!;
 const progressText = document.getElementById('progress-text')!;
 const fileListEl = document.getElementById('file-list')!;
 const statsEl = document.getElementById('stats')!;
+const closePageBtn = document.getElementById('close-page-btn') as HTMLButtonElement;
+const backToListBtn = document.getElementById('back-to-list-btn') as HTMLButtonElement;
 
 // --- Sections ---
 const managerSection = document.getElementById('manager-section')!;
 const downloadSection = document.getElementById('download-section')!;
 
-// i18n helper — static strings only
+// i18n helper
 function msg(key: string): string {
     return chrome.i18n.getMessage(key);
 }
 
 // --- Manager state ---
-let listOffset = 0;
-const LIST_LIMIT = 50;
+const PAGE_SIZE = 20;
+let currentPage = 1;
+let totalRecords = 0;
 
 // --- Download state ---
 let totalChunks = 1;
 let baseFilename = '';
 let totalCount = 0;
+let useSplitFiles = false;
 
 function formatBytes(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
@@ -89,21 +92,23 @@ function updateFileStatus(filename: string, newStatus: string) {
 
 function setError(msgText: string) {
     titleEl.textContent = msg('fallbackDownloadFailed') || 'Download failed';
-    subtitleEl.textContent = '';
+    progressSubtitleEl.textContent = '';
     showSpinner(false);
     progressBar.style.display = 'none';
     messageEl.textContent = msgText;
     messageEl.className = 'error';
-    setTimeout(() => window.close(), 5000);
+    closePageBtn.style.display = 'inline-block';
+    backToListBtn.style.display = 'inline-block';
 }
 
 function setSuccess() {
     titleEl.textContent = msg('fallbackAllDone') || 'All files downloaded!';
-    subtitleEl.textContent = `${totalCount} entries saved`;
+    progressSubtitleEl.textContent = `${totalCount} entries saved`;
     showSpinner(false);
-    messageEl.textContent = msg('fallbackAutoClose') || 'Closing in 3 seconds...';
+    messageEl.textContent = '';
     messageEl.className = 'success';
-    setTimeout(() => window.close(), 3000);
+    closePageBtn.style.display = 'inline-block';
+    backToListBtn.style.display = 'inline-block';
 }
 
 function downloadChunk(json: string, filename: string): Promise<void> {
@@ -131,7 +136,7 @@ function showManagerMode() {
     downloadSection.classList.remove('active');
 }
 
-// --- Manager: request list ---
+// --- Manager: request list pagination ---
 function methodClass(method: string): string {
     const lower = method.toLowerCase();
     if (lower === 'get') return 'method-get';
@@ -151,8 +156,8 @@ function statusClass(status: number | undefined): string {
     return 'status-other';
 }
 
-function renderRequestList(items: Array<{ method: string; url: string; status: number | undefined }>, append: boolean = false) {
-    if (!append) requestListEl.innerHTML = '';
+function renderRequestList(items: Array<{ method: string; url: string; status: number | undefined }>) {
+    requestListEl.innerHTML = '';
     for (const item of items) {
         const el = document.createElement('div');
         el.className = 'request-item';
@@ -165,21 +170,108 @@ function renderRequestList(items: Array<{ method: string; url: string; status: n
     }
 }
 
-async function loadRequestList(append: boolean = false) {
+function renderPagination() {
+    const totalPages = Math.max(1, Math.ceil(totalRecords / PAGE_SIZE));
+    paginationEl.innerHTML = '';
+
+    if (totalPages <= 1) {
+        paginationEl.style.display = 'none';
+        return;
+    }
+    paginationEl.style.display = 'flex';
+
+    // Prev button
+    const prevBtn = document.createElement('button');
+    prevBtn.textContent = '‹ Prev';
+    prevBtn.disabled = currentPage <= 1;
+    prevBtn.addEventListener('click', () => goToPage(currentPage - 1));
+    paginationEl.appendChild(prevBtn);
+
+    // Page numbers
+    const maxVisible = 5;
+    let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+    let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+    if (endPage - startPage < maxVisible - 1) {
+        startPage = Math.max(1, endPage - maxVisible + 1);
+    }
+
+    if (startPage > 1) {
+        const firstBtn = document.createElement('button');
+        firstBtn.textContent = '1';
+        firstBtn.addEventListener('click', () => goToPage(1));
+        paginationEl.appendChild(firstBtn);
+        if (startPage > 2) {
+            const dots = document.createElement('span');
+            dots.className = 'page-info';
+            dots.textContent = '...';
+            paginationEl.appendChild(dots);
+        }
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+        const btn = document.createElement('button');
+        btn.textContent = String(i);
+        if (i === currentPage) btn.classList.add('active');
+        btn.addEventListener('click', () => goToPage(i));
+        paginationEl.appendChild(btn);
+    }
+
+    if (endPage < totalPages) {
+        if (endPage < totalPages - 1) {
+            const dots = document.createElement('span');
+            dots.className = 'page-info';
+            dots.textContent = '...';
+            paginationEl.appendChild(dots);
+        }
+        const lastBtn = document.createElement('button');
+        lastBtn.textContent = String(totalPages);
+        lastBtn.addEventListener('click', () => goToPage(totalPages));
+        paginationEl.appendChild(lastBtn);
+    }
+
+    // Next button
+    const nextBtn = document.createElement('button');
+    nextBtn.textContent = 'Next ›';
+    nextBtn.disabled = currentPage >= totalPages;
+    nextBtn.addEventListener('click', () => goToPage(currentPage + 1));
+    paginationEl.appendChild(nextBtn);
+
+    // Page info
+    const info = document.createElement('span');
+    info.className = 'page-info';
+    info.textContent = `${currentPage} / ${totalPages}`;
+    paginationEl.appendChild(info);
+}
+
+async function goToPage(page: number) {
+    const totalPages = Math.max(1, Math.ceil(totalRecords / PAGE_SIZE));
+    if (page < 1 || page > totalPages) return;
+    currentPage = page;
+    const offset = (page - 1) * PAGE_SIZE;
     try {
         const response = await chrome.runtime.sendMessage({
             type: 'GET_REQUEST_LIST',
-            offset: listOffset,
-            limit: LIST_LIMIT,
+            offset,
+            limit: PAGE_SIZE,
         });
         if (response && response.items) {
-            renderRequestList(response.items, append);
-            listOffset += response.items.length;
-            if (response.items.length >= LIST_LIMIT && listOffset < response.total) {
-                loadMoreContainer.style.display = 'block';
-            } else {
-                loadMoreContainer.style.display = 'none';
-            }
+            renderRequestList(response.items);
+            renderPagination();
+        }
+    } catch { /* ignore */ }
+}
+
+async function loadRequestList() {
+    try {
+        const response = await chrome.runtime.sendMessage({
+            type: 'GET_REQUEST_LIST',
+            offset: 0,
+            limit: PAGE_SIZE,
+        });
+        if (response && response.items) {
+            totalRecords = response.total;
+            renderRequestList(response.items);
+            renderPagination();
         }
     } catch { /* ignore */ }
 }
@@ -192,8 +284,11 @@ async function processChunks(meta: { totalCount: number; totalChunks: number; ba
 
     showSpinner(false);
     titleEl.textContent = msg('fallbackDownloadTitle') || 'Downloading HAR files';
-    subtitleEl.textContent = `${totalCount} entries · ${totalChunks} file${totalChunks > 1 ? 's' : ''}`;
+    progressSubtitleEl.textContent = `${totalCount} entries · ${totalChunks} file${totalChunks > 1 ? 's' : ''}`;
     fileListEl.innerHTML = '';
+    statsEl.textContent = '';
+    messageEl.textContent = '';
+    closePageBtn.style.display = 'none';
 
     for (let i = 1; i <= totalChunks; i++) {
         const filename = baseFilename.replace('.har', totalChunks > 1 ? `-${String(i).padStart(3, '0')}.har` : '.har');
@@ -213,6 +308,7 @@ async function processChunks(meta: { totalCount: number; totalChunks: number; ba
             const chunk = await chrome.runtime.sendMessage({
                 type: 'FALLBACK_REQUEST_CHUNK',
                 chunkIndex: i,
+                splitFiles: useSplitFiles,
             });
 
             if (!chunk || chunk.error) {
@@ -259,7 +355,8 @@ async function initManager() {
     splitLabel.textContent = msg('splitFiles') || 'Split into files for large data';
     saveHarButton.textContent = msg('saveHarButton') || 'Save as HAR';
     clearDataButton.textContent = msg('clearDataButton') || 'Clear Data';
-    loadMoreBtn.textContent = msg('loadMore') || 'Load more';
+    closePageBtn.textContent = msg('closePage') || 'Close Page';
+    backToListBtn.textContent = msg('backToList') || 'Back to List';
 
     const { splitFiles } = await chrome.storage.local.get('splitFiles');
     splitFilesInput.checked = !!splitFiles;
@@ -272,7 +369,11 @@ async function initManager() {
     }
 
     saveHarButton.addEventListener('click', async () => {
-        const count = await chrome.runtime.sendMessage({ type: 'FALLBACK_INIT_DOWNLOAD' });
+        useSplitFiles = splitFilesInput.checked;
+        const count = await chrome.runtime.sendMessage({
+            type: 'FALLBACK_INIT_DOWNLOAD',
+            splitFiles: useSplitFiles,
+        });
         if (!count || count.error) {
             setError(msg('fallbackNoData') || 'No requests captured.');
             return;
@@ -285,17 +386,14 @@ async function initManager() {
         chrome.runtime.sendMessage({ type: 'CLEAR_DATA' });
         requestCountEl.textContent = '0';
         requestListEl.innerHTML = '';
-        loadMoreContainer.style.display = 'none';
-        listOffset = 0;
+        paginationEl.style.display = 'none';
+        currentPage = 1;
+        totalRecords = 0;
     });
 
-    loadMoreBtn.addEventListener('click', () => {
-        loadMoreBtn.disabled = true;
-        loadMoreBtn.textContent = 'Loading...';
-        loadRequestList(true).finally(() => {
-            loadMoreBtn.disabled = false;
-            loadMoreBtn.textContent = msg('loadMore') || 'Load more';
-        });
+    backToListBtn.addEventListener('click', () => {
+        showManagerMode();
+        loadRequestList();
     });
 
     splitFilesInput.addEventListener('change', () => {
@@ -305,9 +403,14 @@ async function initManager() {
     chrome.runtime.onMessage.addListener((message: any) => {
         if (message.type === 'UPDATE_COUNT') {
             requestCountEl.textContent = message.count.toString();
+            totalRecords = message.count;
             if (message.count > 0 && requestListEl.children.length === 0) {
-                listOffset = 0;
+                currentPage = 1;
                 loadRequestList();
+            } else if (message.count === 0) {
+                requestListEl.innerHTML = '';
+                paginationEl.style.display = 'none';
+                totalRecords = 0;
             }
         }
     });
@@ -322,7 +425,7 @@ async function checkLegacyStorage(): Promise<boolean> {
             const { harString, safeFilename } = result._pendingHarDownload;
             showDownloadMode();
             titleEl.textContent = msg('fallbackDownloadTitle') || 'Downloading HAR file';
-            subtitleEl.textContent = safeFilename;
+            progressSubtitleEl.textContent = safeFilename;
             showSpinner(true);
             await downloadChunk(harString, safeFilename);
             showSpinner(false);
@@ -345,5 +448,5 @@ main().catch(e => {
     titleEl.textContent = msg('fallbackDownloadFailed') || 'Error';
     messageEl.textContent = `Unexpected error: ${e instanceof Error ? e.message : String(e)}`;
     messageEl.className = 'error';
-    setTimeout(() => window.close(), 3000);
+    closePageBtn.style.display = 'inline-block';
 });
